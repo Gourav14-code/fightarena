@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Ragdoll Fight Arena</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="game-wrapper">
+    <div id="canvas-container">
+      <canvas id="game-canvas" width="1280" height="720"></canvas>
+
+      <!-- Minimal UI Overlay -->
+      <div id="ui-overlay">
+        <!-- Top HUD -->
+        <div class="hud-top">
+          <div class="game-title">Ragdoll <span>Fight</span> Arena</div>
+          <div class="fighters-hud">
+            <!-- Player Bar -->
+            <div class="fighter-bar-container">
+              <div class="fighter-info player-info">
+                <span>PLAYER 1</span>
+                <span id="player-hp-text">100 HP</span>
+              </div>
+              <div class="health-bar-track" id="player-health-bar">
+                <div class="health-lag-bar" id="player-lag-fill" style="width: 100%;"></div>
+                <div class="health-fill-bar" id="player-health-fill" style="width: 100%;"></div>
+              </div>
+            </div>
+
+            <div class="vs-badge">VS</div>
+
+            <!-- Enemy Bar -->
+            <div class="fighter-bar-container">
+              <div class="fighter-info enemy-info">
+                <span>ENEMY AI</span>
+                <span id="enemy-hp-text">100 HP</span>
+              </div>
+              <div class="health-bar-track" id="enemy-health-bar">
+                <div class="health-lag-bar" id="enemy-lag-fill" style="width: 100%;"></div>
+                <div class="health-fill-bar" id="enemy-health-fill" style="width: 100%;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bottom Controls HUD -->
+        <div class="hud-bottom">
+          <div class="controls-panel">
+            <div class="control-item"><span class="key-badge" id="key-A">A</span><span class="key-badge" id="key-D">D</span> Move</div>
+            <div class="control-item"><span class="key-badge" id="key-Space">SPACE</span> Jump</div>
+            <div class="control-item"><span class="key-badge" id="key-J">J</span> Normal Punch</div>
+            <div class="control-item"><span class="key-badge" id="key-K">K</span> Heavy Punch</div>
+            <div class="control-item"><span class="key-badge" id="key-L">L</span> Dodge</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Victory / Defeat Modal -->
+      <div id="modal-overlay">
+        <div class="modal-content">
+          <h1 id="modal-title" class="modal-title">KNOCKOUT!</h1>
+          <p id="modal-subtitle" class="modal-subtitle">Press the button below or Space to restart.</p>
+          <button id="btn-restart" class="btn-restart">Fight Again</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Physics Engine -->
+  <script src="js/matter.min.js"></script>
+  <script>
+    if (typeof Matter === 'undefined') {
+      document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"><\/script>');
+    }
+  </script>
+
+  <!-- Game Modules -->
+  <script src="js/physics.js"></script>
+  <script src="js/combat.js"></script>
+  <script src="js/player.js"></script>
+  <script src="js/enemy.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

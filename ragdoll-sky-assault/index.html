@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Ragdoll Sky Assault</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="game-wrapper">
+    <div id="canvas-container">
+      <canvas id="game-canvas" width="1280" height="720"></canvas>
+
+      <!-- Action HUD Overlay -->
+      <div id="ui-overlay">
+        <!-- Top HUD -->
+        <div class="hud-top">
+          <!-- Left: Health & Jetpack Fuel -->
+          <div class="hud-left">
+            <div class="stat-bar-group">
+              <div class="stat-label-row">
+                <span class="health-label">Hull Integrity</span>
+                <span id="player-hp-text">100 / 100</span>
+              </div>
+              <div class="bar-track" id="player-health-bar">
+                <div class="health-lag-bar" id="player-lag-fill" style="width: 100%;"></div>
+                <div class="health-fill-bar" id="player-health-fill" style="width: 100%;"></div>
+              </div>
+            </div>
+
+            <div class="stat-bar-group">
+              <div class="stat-label-row">
+                <span class="fuel-label">Jetpack Thrust Fuel</span>
+                <span id="player-fuel-text">100%</span>
+              </div>
+              <div class="bar-track" id="player-fuel-bar">
+                <div class="fuel-fill-bar" id="player-fuel-fill" style="width: 100%;"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Center: Title & Wave -->
+          <div class="hud-center">
+            <div class="game-title">Sky <span>Assault</span></div>
+            <div class="wave-badge" id="wave-badge">WAVE 1 – SCRAP YARD</div>
+          </div>
+
+          <!-- Right: Score & Enemies Defeated -->
+          <div class="hud-right">
+            <div class="score-display">
+              <span class="stat-title">SCORE:</span>
+              <span class="stat-value" id="score-text">0</span>
+            </div>
+            <div class="kills-display">
+              <span class="stat-title">DEFEATED:</span>
+              <span class="stat-value" id="kills-text">0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Center Notification: Weapon Pickup Toast -->
+        <div class="pickup-prompt-toast" id="pickup-prompt">
+          <span class="key-badge">E</span> <span id="pickup-text">EQUIP SCATTER GUN</span>
+        </div>
+
+        <!-- Bottom HUD -->
+        <div class="hud-bottom">
+          <!-- Left: Active Weapon Card -->
+          <div class="weapon-hud-card">
+            <div class="weapon-icon-box" id="weapon-icon">⚡</div>
+            <div class="weapon-details">
+              <div class="weapon-name" id="weapon-name">PULSE BLASTER</div>
+              <div class="ammo-counter" id="weapon-ammo">AMMO: ∞ (AUTO-CHARGE)</div>
+            </div>
+          </div>
+
+          <!-- Right: Desktop Controls Reference -->
+          <div class="controls-panel">
+            <div class="control-item"><span class="key-badge" id="key-A">A</span><span class="key-badge" id="key-D">D</span> Fly/Move</div>
+            <div class="control-item"><span class="key-badge" id="key-Space">SPACE</span> Jetpack</div>
+            <div class="control-item"><span class="key-badge" id="key-Shift">SHIFT</span> Dash</div>
+            <div class="control-item"><span class="key-badge">MOUSE</span> Aim</div>
+            <div class="control-item"><span class="key-badge" id="key-LMB">L-CLICK</span> Fire</div>
+            <div class="control-item"><span class="key-badge" id="key-E">E</span> Pickup</div>
+            <div class="control-item"><span class="key-badge" id="key-Esc">ESC</span> Pause</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal Dialog: Pause / Victory / Defeat -->
+      <div id="modal-overlay">
+        <div class="modal-content">
+          <h1 id="modal-title" class="modal-title">MISSION PAUSED</h1>
+          <div class="modal-stats" id="modal-stats">
+            <div>Score: <strong id="modal-score">0</strong></div>
+            <div>Enemies Defeated: <strong id="modal-kills">0</strong></div>
+            <div>Wave Reached: <strong id="modal-wave">1</strong></div>
+          </div>
+          <div class="modal-buttons">
+            <button id="btn-modal-primary" class="btn-primary">RESUME</button>
+            <button id="btn-modal-secondary" class="btn-secondary">RESTART MISSION</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Local Matter.js physics engine with CDN fallback -->
+  <script src="js/matter.min.js"></script>
+  <script>
+    if (typeof Matter === 'undefined') {
+      document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"><\/script>');
+    }
+  </script>
+
+  <!-- Modular Game Scripts -->
+  <script src="js/camera.js"></script>
+  <script src="js/physics.js"></script>
+  <script src="js/jetpack.js"></script>
+  <script src="js/weapons.js"></script>
+  <script src="js/pickups.js"></script>
+  <script src="js/level.js"></script>
+  <script src="js/combat.js"></script>
+  <script src="js/player.js"></script>
+  <script src="js/enemy.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
