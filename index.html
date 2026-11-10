@@ -2,39 +2,29 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="refresh" content="0; url=monster-knockout/index.html">
-  <title>Monster Knockout</title>
-  <script>
-    window.location.href = "monster-knockout/index.html";
-  </script>
-  <style>
-    body {
-      background: #080d14;
-      color: #38bdf8;
-      font-family: sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-      margin: 0;
-      text-align: center;
-    }
-    a {
-      display: inline-block;
-      margin-top: 15px;
-      padding: 12px 24px;
-      background: #059669;
-      color: #fff;
-      text-decoration: none;
-      border-radius: 6px;
-      font-weight: bold;
-    }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Monster Knockout - Endless Creature Survival</title>
+  <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <h2>Loading Monster Knockout...</h2>
-  <p>If your browser does not redirect automatically:</p>
-  <a href="monster-knockout/index.html">Click Here to Launch Monster Knockout</a>
+  <div id="game-container"></div>
+
+  <!-- Phaser 3 Framework (Bundled with Matter.js) -->
+  <script src="assets/phaser.min.js"></script>
+
+  <!-- Core Game Systems & Entities -->
+  <script src="src/systems/Trajectory.js"></script>
+  <script src="src/entities/Projectile.js"></script>
+  <script src="src/entities/Arrow.js"></script>
+  <script src="src/entities/RagdollCreature.js"></script>
+
+  <!-- Core Game Scenes -->
+  <script src="src/scenes/BootScene.js"></script>
+  <script src="src/scenes/MenuScene.js"></script>
+  <script src="src/scenes/GameScene.js"></script>
+  <script src="src/scenes/UIScene.js"></script>
+
+  <!-- Game Bootstrap -->
+  <script src="src/main.js"></script>
 </body>
 </html>

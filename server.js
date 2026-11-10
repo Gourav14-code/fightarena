@@ -19,7 +19,7 @@ const MIME_TYPES = {
 const server = http.createServer((req, res) => {
   let reqPath = decodeURI(req.url.split('?')[0]);
   if (reqPath === '/' || reqPath === '') {
-    reqPath = '/monster-knockout/index.html';
+    reqPath = '/index.html';
   }
 
   let filePath = path.join(ROOT_DIR, reqPath);

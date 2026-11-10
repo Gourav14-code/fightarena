@@ -43,7 +43,7 @@
 ## 2. Directory Structure
 
 ```
-monster-knockout/
+c:/arna/ (fightarena)
 ├── index.html                  # Widescreen desktop canvas wrapper
 ├── css/
 │   └── style.css               # Landscape desktop flex container
