@@ -56,6 +56,15 @@
   (function() {
     'use strict';
 
+    window.addEventListener('error', (e) => {
+      console.error('RUNTIME ERROR:', e.message, e.filename, e.lineno);
+      const errDiv = document.createElement('div');
+      errDiv.id = 'debug-error';
+      errDiv.style = 'position:fixed; top:10px; left:10px; color:#ff4444; background:black; padding:10px; z-index:99999; font-size:16px;';
+      errDiv.textContent = 'ERR: ' + e.message + ' line ' + e.lineno;
+      document.body.appendChild(errDiv);
+    });
+
     // =========================================================================
     // 1. PROCEDURAL SOUND SYNTHESIZER (Web Audio API)
     // =========================================================================
@@ -1842,7 +1851,6 @@
         this.transitionPhase = 'NONE';
         this.resetEnemyTimer();
       }
-
       triggerGameOver() {
         if (this.gameState === 'GAME_OVER') return;
         this.gameState = 'GAME_OVER';
