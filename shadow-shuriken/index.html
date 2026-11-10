@@ -39,11 +39,11 @@
       cursor: crosshair;
     }
   </style>
-  <!-- Matter.js 2D Physics Library (CDN with local fallback) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+  <!-- Matter.js 2D Physics Library (Local with CDN fallback) -->
+  <script src="matter.min.js"></script>
   <script>
     if (typeof Matter === 'undefined') {
-      document.write('<script src="matter.min.js"><\/script>');
+      document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"><\/script>');
     }
   </script>
 </head>
@@ -319,6 +319,7 @@
         this.isArmored = options.isArmored || false;
         this.isDead = false;
         this.isRagdoll = false;
+        this.staggerTimer = 0;
         this.scarf = isPlayer ? new CrimsonScarf(8, 8) : null;
         if (this.scarf) this.scarf.init(x, y - 24);
 
@@ -441,33 +442,44 @@
           return;
         }
 
-        // Active Upright Balance Stabilizer
+        // Active Upright Stance Controller
         if (!this.isRagdoll && !this.isDead) {
-          const torsoAngle = this.torso.angle;
-          const angVel = this.torso.angularVelocity;
-          const kp = 0.08;
-          const kd = 0.05;
-          const restorativeTorque = -kp * torsoAngle - kd * angVel;
+          if (this.staggerTimer > 0) {
+            // Briefly allow stagger flinch from hit impulse
+            this.staggerTimer -= delta;
+          } else {
+            // Critical Wounded Posture when HP < 25%
+            const isCritical = (this.health / this.maxHealth) < 0.25;
+            const targetTorsoAngle = isCritical ? (this.isPlayer ? 0.28 : -0.28) : 0;
+            const targetHeadAngle = isCritical ? (this.isPlayer ? 0.35 : -0.35) : 0;
+            const breathOffset = isCritical ? Math.sin(Date.now() * 0.008) * 3 : 0;
 
-          Matter.Body.applyForce(this.torso, {
-            x: this.torso.position.x,
-            y: this.torso.position.y - 18
-          }, {
-            x: restorativeTorque * 0.015,
-            y: 0
-          });
+            // Restorative Upright Angular Torque
+            const angleDiff = targetTorsoAngle - this.torso.angle;
+            Matter.Body.setAngle(this.torso, this.torso.angle + angleDiff * 0.25);
+            Matter.Body.setAngularVelocity(this.torso, this.torso.angularVelocity * 0.5);
 
-          // Feet grounded spring to home perch
-          const dx = this.homeX - this.torso.position.x;
-          if (Math.abs(dx) > 1) {
-            Matter.Body.applyForce(this.torso, this.torso.position, {
-              x: dx * 0.0008,
-              y: 0
+            const headDiff = targetHeadAngle - this.head.angle;
+            Matter.Body.setAngle(this.head, this.head.angle + headDiff * 0.25);
+            Matter.Body.setAngularVelocity(this.head, 0);
+
+            // Firm Grounding & Platform Support (prevents sinking/slipping under gravity)
+            const targetY = (this.homeY - 6) + breathOffset;
+            const dy = targetY - this.torso.position.y;
+            const dx = this.homeX - this.torso.position.x;
+            Matter.Body.setVelocity(this.torso, {
+              x: this.torso.velocity.x * 0.75 + dx * 0.12,
+              y: this.torso.velocity.y * 0.75 + dy * 0.12
             });
-          }
 
-          // Gentle pose stabilization
-          Matter.Body.setAngularVelocity(this.head, -this.head.angle * 0.2);
+            // Keep Legs Vertical like Sturdy Pillars
+            Matter.Body.setAngle(this.leftLeg, 0);
+            Matter.Body.setAngle(this.rightLeg, 0);
+            Matter.Body.setAngularVelocity(this.leftLeg, 0);
+            Matter.Body.setAngularVelocity(this.rightLeg, 0);
+            Matter.Body.setVelocity(this.leftLeg, { x: 0, y: this.torso.velocity.y });
+            Matter.Body.setVelocity(this.rightLeg, { x: 0, y: this.torso.velocity.y });
+          }
         }
 
         // Scarf update
@@ -489,6 +501,7 @@
         }
 
         this.health -= damage;
+        this.staggerTimer = isHeadshot ? 0 : 340; // Stagger flinch
 
         // Physical impulse
         if (hitBody && hitBody.position) {
@@ -503,8 +516,8 @@
 
         // Non-lethal hit wobble
         Matter.Body.applyForce(this.torso, this.torso.position, {
-          x: impulseForce.x * 0.5,
-          y: impulseForce.y * 0.5 - 0.01
+          x: impulseForce.x * 0.65,
+          y: impulseForce.y * 0.65 - 0.015
         });
         return { defeated: false, isHeadshot: false };
       }
@@ -512,10 +525,11 @@
       triggerRagdollDefeat(impulse = { x: 0, y: 0 }) {
         this.isDead = true;
         this.isRagdoll = true;
+        this.staggerTimer = 0;
 
-        // Loosen joints for floppy cartoon ragdoll physics
+        // Loosen joints for floppy ragdoll tumble
         for (let c of this.constraints) {
-          c.stiffness = 0.25;
+          c.stiffness = 0.22;
           c.damping = 0.02;
         }
 
@@ -524,8 +538,8 @@
         const flingY = -0.035 + (impulse.y * 1.5 || 0);
 
         Matter.Body.applyForce(this.torso, this.torso.position, { x: flingX, y: flingY });
-        Matter.Body.setAngularVelocity(this.torso, (Math.random() > 0.5 ? 1 : -1) * 0.25);
-        Matter.Body.setAngularVelocity(this.head, (Math.random() > 0.5 ? 1 : -1) * 0.35);
+        Matter.Body.setAngularVelocity(this.torso, (Math.random() > 0.5 ? 1 : -1) * 0.28);
+        Matter.Body.setAngularVelocity(this.head, (Math.random() > 0.5 ? 1 : -1) * 0.38);
       }
 
       render(ctx) {
@@ -648,10 +662,11 @@
     // 4. SHURIKEN PROJECTILE
     // =========================================================================
     class Shuriken {
-      constructor(engine, x, y, vx, vy, isPlayer = true) {
+      constructor(engine, x, y, vx, vy, isPlayer = true, game = null) {
         this.engine = engine;
         this.world = engine.world;
         this.isPlayer = isPlayer;
+        this.game = game;
         this.isStuck = false;
         this.stuckTarget = null;
         this.stuckOffset = { x: 0, y: 0 };
@@ -659,6 +674,11 @@
         this.trail = [];
         this.lifeTime = 0;
         this.radius = 11;
+
+        // Ground Despawn (2.5s timer + fade + smoke puff)
+        this.isGroundStuck = false;
+        this.groundStuckTimer = 2500;
+        this.isMarkedForRemoval = false;
 
         this.body = Matter.Bodies.circle(x, y, this.radius, {
           density: 0.005,
@@ -676,6 +696,19 @@
 
       update(time, delta) {
         this.lifeTime += delta;
+
+        // Ground stuck countdown
+        if (this.isGroundStuck) {
+          this.groundStuckTimer -= delta;
+          if (this.groundStuckTimer <= 0 && !this.isMarkedForRemoval) {
+            this.isMarkedForRemoval = true;
+            if (this.game && this.game.particles) {
+              this.game.particles.spawnDustPuff(this.body.position.x, this.body.position.y, 14);
+            }
+          }
+          return;
+        }
+
         if (this.isStuck && this.stuckTarget && this.stuckTarget.position) {
           // Attached to hit ragdoll part
           const cos = Math.cos(this.stuckTarget.angle);
@@ -714,6 +747,15 @@
       }
 
       render(ctx) {
+        // Fade out on ground despawn
+        let fadeAlpha = 1.0;
+        if (this.isGroundStuck && this.groundStuckTimer < 600) {
+          fadeAlpha = Math.max(0, this.groundStuckTimer / 600);
+        }
+
+        ctx.save();
+        ctx.globalAlpha = fadeAlpha;
+
         // Glowing motion trail
         if (this.trail.length > 1 && !this.isStuck) {
           ctx.save();
@@ -776,6 +818,7 @@
         ctx.fillStyle = '#fbbf24';
         ctx.fill();
 
+        ctx.restore();
         ctx.restore();
       }
 
@@ -924,6 +967,8 @@
         this.height = canvasHeight;
         this.petals = [];
         this.sparks = [];
+        this.dustPuffs = [];
+        this.healSparkles = [];
 
         // Spawn sakura petals
         for (let i = 0; i < 45; i++) {
@@ -962,6 +1007,37 @@
         }
       }
 
+      spawnDustPuff(x, y, count = 12) {
+        for (let i = 0; i < count; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 0.5 + Math.random() * 1.8;
+          this.dustPuffs.push({
+            x: x + (Math.random() * 8 - 4),
+            y: y + (Math.random() * 6 - 3),
+            vx: Math.cos(angle) * speed,
+            vy: -0.6 - Math.random() * 1.2,
+            radius: 4 + Math.random() * 6,
+            maxRadius: 12 + Math.random() * 8,
+            alpha: 0.75,
+            decay: 0.02 + Math.random() * 0.015,
+            color: Math.random() > 0.5 ? 'rgba(148, 163, 184, ' : 'rgba(100, 116, 139, '
+          });
+        }
+      }
+
+      spawnHealingSparkles(x, y) {
+        for (let i = 0; i < 3; i++) {
+          this.healSparkles.push({
+            x: x + (Math.random() * 26 - 13),
+            y: y + (Math.random() * 20 - 10),
+            vy: -1.2 - Math.random() * 0.8,
+            radius: 2.5 + Math.random() * 2,
+            alpha: 0.9,
+            decay: 0.03
+          });
+        }
+      }
+
       update() {
         // Petals
         for (let p of this.petals) {
@@ -985,6 +1061,26 @@
             this.sparks.splice(i, 1);
           }
         }
+        // Dust Puffs
+        for (let i = this.dustPuffs.length - 1; i >= 0; i--) {
+          const d = this.dustPuffs[i];
+          d.x += d.vx;
+          d.y += d.vy;
+          d.radius += 0.35;
+          d.alpha -= d.decay;
+          if (d.alpha <= 0) {
+            this.dustPuffs.splice(i, 1);
+          }
+        }
+        // Healing Sparkles
+        for (let i = this.healSparkles.length - 1; i >= 0; i--) {
+          const h = this.healSparkles[i];
+          h.y += h.vy;
+          h.alpha -= h.decay;
+          if (h.alpha <= 0) {
+            this.healSparkles.splice(i, 1);
+          }
+        }
       }
 
       render(ctx) {
@@ -1006,6 +1102,23 @@
           ctx.globalAlpha = Math.max(0, s.alpha);
           ctx.beginPath();
           ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        // Render Dust Puffs
+        for (let d of this.dustPuffs) {
+          ctx.fillStyle = d.color + Math.max(0, d.alpha) + ')';
+          ctx.beginPath();
+          ctx.arc(d.x, d.y, d.radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        // Render Healing Sparkles
+        for (let h of this.healSparkles) {
+          ctx.fillStyle = '#22c55e';
+          ctx.shadowColor = '#4ade80';
+          ctx.shadowBlur = 8;
+          ctx.globalAlpha = Math.max(0, h.alpha);
+          ctx.beginPath();
+          ctx.arc(h.x, h.y, h.radius, 0, Math.PI * 2);
           ctx.fill();
         }
         ctx.restore();
@@ -1038,6 +1151,14 @@
         this.goldCoins = 0;
         this.kills = 0;
         this.headshots = 0;
+
+        // Stamina, Fatigue & Passive Healing
+        this.playerStamina = 100;
+        this.maxStamina = 100;
+        this.timeSinceLastDamage = 9999;
+
+        // Hit Location Highlights (wound marks)
+        this.hitMarkers = [];
 
         // Camera scroll
         this.cameraX = 0;
@@ -1078,6 +1199,12 @@
             this.pointerStart = { x: 300, y: 420 };
             this.pointerCurrent = { x: 210, y: 490 };
           }
+          if (urlParams.get('fatigue') === '1') {
+            this.playerStamina = 15;
+          }
+          if (urlParams.get('lowhp') === '1' && this.player) {
+            this.player.health = 20;
+          }
         }
 
         // Enemy AI Interval
@@ -1087,6 +1214,37 @@
         // Start Loop
         this.lastTime = performance.now();
         requestAnimationFrame((t) => this.gameLoop(t));
+      }
+
+      getAimLaunchVector() {
+        if (!this.player || this.player.isDead) return null;
+        const dx = this.pointerStart.x - this.pointerCurrent.x;
+        const dy = this.pointerStart.y - this.pointerCurrent.y;
+        const pullDist = Math.sqrt(dx * dx + dy * dy);
+        if (pullDist < 12) return null;
+
+        const pullClamped = Math.min(pullDist, this.maxPullDistance);
+        const baseAngle = Math.atan2(dy, dx);
+
+        // Stamina Fatigue Scaling
+        let fatiguePowerScale = 1.0;
+        let fatigueWobbleAngle = 0;
+        if (this.playerStamina < 25) {
+          const fatPct = (25 - this.playerStamina) / 25; // 0 to 1
+          fatiguePowerScale = 1.0 - fatPct * 0.35; // Power reduced up to 35%
+          fatigueWobbleAngle = Math.sin(Date.now() * 0.035) * fatPct * 0.10; // Aim tremors / shake
+        }
+
+        const angle = baseAngle + fatigueWobbleAngle;
+        const power = pullClamped * 0.22 * fatiguePowerScale;
+
+        const vx = Math.cos(angle) * power;
+        const vy = Math.sin(angle) * power;
+
+        const startX = this.player.torso.position.x + 18;
+        const startY = this.player.torso.position.y - 12;
+
+        return { startX, startY, vx, vy, pullDist, fatiguePowerScale };
       }
 
       initPhysics() {
@@ -1139,25 +1297,15 @@
           if (!this.isAiming) return;
           this.isAiming = false;
 
-          // Calculate launch impulse from pull-back vector
-          const dx = this.pointerStart.x - this.pointerCurrent.x;
-          const dy = this.pointerStart.y - this.pointerCurrent.y;
-          const pullDist = Math.sqrt(dx * dx + dy * dy);
-
-          if (pullDist > 18 && this.player && !this.player.isDead) {
-            const pullClamped = Math.min(pullDist, this.maxPullDistance);
-            const power = pullClamped * 0.22;
-            const angle = Math.atan2(dy, dx);
-
-            const vx = Math.cos(angle) * power;
-            const vy = Math.sin(angle) * power;
-
-            // Spawn player shuriken
-            const spawnX = this.player.torso.position.x + 18;
-            const spawnY = this.player.torso.position.y - 12;
-            const shuriken = new Shuriken(this.engine, spawnX, spawnY, vx, vy, true);
+          const aim = this.getAimLaunchVector();
+          if (aim && this.player && !this.player.isDead) {
+            // Launch shuriken along EXACT calculated trajectory vector
+            const shuriken = new Shuriken(this.engine, aim.startX, aim.startY, aim.vx, aim.vy, true, this);
             this.projectiles.push(shuriken);
             this.sounds.playThrow();
+
+            // Deduct Stamina
+            this.playerStamina = Math.max(0, this.playerStamina - 28);
           }
         };
 
@@ -1214,7 +1362,12 @@
         this.platforms = [];
         this.projectiles = [];
         this.popups = [];
+        this.hitMarkers = [];
 
+        // Reset Progression & Stamina
+        this.playerStamina = 100;
+        this.maxStamina = 100;
+        this.timeSinceLastDamage = 9999;
         this.distanceMeters = 0;
         this.goldCoins = 0;
         this.kills = 0;
@@ -1326,6 +1479,21 @@
               const res = ragdoll.applyHit(damage, targetBody, { x: hitVx, y: hitVy }, isHeadshot);
               shuriken.stickTo(targetBody);
 
+              // Record Wound / Hit Location Highlight on the exact body part
+              const cos = Math.cos(-targetBody.angle);
+              const sin = Math.sin(-targetBody.angle);
+              const dx = shurikenBody.position.x - targetBody.position.x;
+              const dy = shurikenBody.position.y - targetBody.position.y;
+              this.hitMarkers.push({
+                targetBody: targetBody,
+                localX: dx * cos - dy * sin,
+                localY: dx * sin + dy * cos,
+                isHeadshot: isHeadshot,
+                color: isHeadshot ? '#fbbf24' : '#ff003c',
+                alpha: 1.0,
+                lifeTime: 1400
+              });
+
               // Effects
               this.particles.spawnImpactSparks(shurikenBody.position.x, shurikenBody.position.y, isHeadshot ? 28 : 14, isHeadshot);
               this.sounds.playHit(isHeadshot);
@@ -1356,11 +1524,27 @@
               const isHeadshot = targetBody.label === 'player_head';
               const damage = isHeadshot ? 65 : 30;
 
+              this.timeSinceLastDamage = 0; // Interrupt passive healing
               const hitVx = shurikenBody.velocity.x * 0.003;
               const hitVy = shurikenBody.velocity.y * 0.003 - 0.01;
 
               ragdoll.applyHit(damage, targetBody, { x: hitVx, y: hitVy }, isHeadshot);
               shuriken.stickTo(targetBody);
+
+              // Record Wound / Hit Location Highlight on Player
+              const cos = Math.cos(-targetBody.angle);
+              const sin = Math.sin(-targetBody.angle);
+              const dx = shurikenBody.position.x - targetBody.position.x;
+              const dy = shurikenBody.position.y - targetBody.position.y;
+              this.hitMarkers.push({
+                targetBody: targetBody,
+                localX: dx * cos - dy * sin,
+                localY: dx * sin + dy * cos,
+                isHeadshot: isHeadshot,
+                color: '#ef4444',
+                alpha: 1.0,
+                lifeTime: 1400
+              });
 
               this.particles.spawnImpactSparks(shurikenBody.position.x, shurikenBody.position.y, 16, isHeadshot);
               this.sounds.playHit(isHeadshot);
@@ -1371,12 +1555,16 @@
               }
             }
 
-            // Shuriken hitting Rooftop Tile
+            // Shuriken hitting Rooftop Tile (Platform Ground)
             if (targetBody.label === 'platform') {
-              shuriken.isStuck = true;
-              Matter.Body.setVelocity(shuriken.body, { x: 0, y: 0 });
-              Matter.Body.setAngularVelocity(shuriken.body, 0);
-              this.particles.spawnImpactSparks(shurikenBody.position.x, shurikenBody.position.y, 6, false);
+              if (!shuriken.isStuck && !shuriken.isGroundStuck) {
+                shuriken.isGroundStuck = true;
+                shuriken.isStuck = true;
+                shuriken.groundStuckTimer = 2500; // Stay stuck for 2.5 seconds before despawn
+                Matter.Body.setVelocity(shuriken.body, { x: 0, y: 0 });
+                Matter.Body.setAngularVelocity(shuriken.body, 0);
+                this.particles.spawnImpactSparks(shurikenBody.position.x, shurikenBody.position.y, 8, false);
+              }
             }
           }
         }
@@ -1542,7 +1730,24 @@
           }
         }
 
-        // 3. Update Entities
+        // 3. Stamina Regeneration & Passive Healing
+        if (this.gameState === 'PLAYING') {
+          // Regenerate stamina when not dragging
+          if (!this.isAiming) {
+            this.playerStamina = Math.min(this.maxStamina, this.playerStamina + (delta / 1000) * 32);
+          }
+
+          // Passive Healing: after 2.5s without taking damage
+          this.timeSinceLastDamage += delta;
+          if (this.timeSinceLastDamage > 2500 && this.player && !this.player.isDead && this.player.health < this.player.maxHealth) {
+            this.player.health = Math.min(this.player.maxHealth, this.player.health + (delta / 1000) * 5.0);
+            if (Math.random() < 0.22) {
+              this.particles.spawnHealingSparkles(this.player.torso.position.x, this.player.torso.position.y);
+            }
+          }
+        }
+
+        // 4. Update Entities
         const isDashing = this.gameState === 'AUTO_DASH';
         if (this.player) {
           this.player.update(currentTime, delta, isDashing);
@@ -1567,11 +1772,11 @@
           }
         }
 
-        // Update Projectiles
+        // Update Projectiles & Despawn Ground Misses
         for (let i = this.projectiles.length - 1; i >= 0; i--) {
           const p = this.projectiles[i];
           p.update(currentTime, delta);
-          if (p.body.position.y > 800 || p.body.position.x < this.cameraX - 400 || p.body.position.x > this.cameraX + 1800) {
+          if (p.isMarkedForRemoval || p.body.position.y > 800 || p.body.position.x < this.cameraX - 400 || p.body.position.x > this.cameraX + 1800) {
             p.destroy();
             this.projectiles.splice(i, 1);
           }
@@ -1593,7 +1798,7 @@
           }
         }
 
-        // 4. Render Frame
+        // 5. Render Frame
         this.render();
 
         requestAnimationFrame((t) => this.gameLoop(t));
@@ -1645,15 +1850,49 @@
         if (this.player) this.player.render(ctx);
         for (let enemy of this.enemies) enemy.render(ctx);
 
-        // 6. Shurikens
+        // 6. Hit Location Highlight Markers (Slashes/Wound Bursts)
+        for (let i = this.hitMarkers.length - 1; i >= 0; i--) {
+          const m = this.hitMarkers[i];
+          m.alpha -= (16.6 / m.lifeTime);
+          if (m.alpha <= 0 || !m.targetBody || !m.targetBody.position) {
+            this.hitMarkers.splice(i, 1);
+            continue;
+          }
+          const tCos = Math.cos(m.targetBody.angle);
+          const tSin = Math.sin(m.targetBody.angle);
+          const mx = m.targetBody.position.x + (m.localX * tCos - m.localY * tSin);
+          const my = m.targetBody.position.y + (m.localX * tSin + m.localY * tCos);
+
+          ctx.save();
+          ctx.globalAlpha = Math.max(0, m.alpha);
+          ctx.strokeStyle = m.color;
+          ctx.lineWidth = m.isHeadshot ? 3.5 : 2.5;
+          ctx.shadowColor = m.color;
+          ctx.shadowBlur = 12;
+
+          // Glowing slash mark
+          ctx.beginPath();
+          ctx.moveTo(mx - 9, my - 9); ctx.lineTo(mx + 9, my + 9);
+          ctx.moveTo(mx + 9, my - 9); ctx.lineTo(mx - 9, my + 9);
+          ctx.stroke();
+
+          // Bright wound core dot
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(mx, my, m.isHeadshot ? 4.5 : 3.0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // 7. Shurikens
         for (let p of this.projectiles) p.render(ctx);
 
-        // 7. Ballistic Aim Trajectory Arc
+        // 8. Ballistic Aim Trajectory Arc
         if (this.isAiming && this.player && !this.player.isDead) {
           this.renderAimTrajectory(ctx);
         }
 
-        // 8. Floating Combat Popups
+        // 9. Floating Combat Popups
         for (let pop of this.popups) {
           ctx.save();
           ctx.font = pop.isCrit ? '900 24px "Cinzel", serif' : 'bold 20px "Cinzel", serif';
@@ -1668,13 +1907,13 @@
 
         ctx.restore(); // Restore Camera
 
-        // 9. Foreground Sakura Petals & Embers
+        // 10. Foreground Sakura Petals & Embers
         this.particles.render(ctx);
 
-        // 10. Minimalist Shinobi HUD
+        // 11. Minimalist Shinobi HUD
         this.renderHUD(ctx);
 
-        // 11. Screen Overlays (Start / Game Over)
+        // 12. Screen Overlays (Start / Game Over)
         if (this.gameState === 'START') {
           this.renderStartScreen(ctx);
         } else if (this.gameState === 'GAME_OVER') {
@@ -1760,37 +1999,26 @@
       }
 
       renderAimTrajectory(ctx) {
-        const dx = this.pointerStart.x - this.pointerCurrent.x;
-        const dy = this.pointerStart.y - this.pointerCurrent.y;
-        const pullDist = Math.sqrt(dx * dx + dy * dy);
-        if (pullDist < 12) return;
+        const aim = this.getAimLaunchVector();
+        if (!aim) return;
 
-        const pullClamped = Math.min(pullDist, this.maxPullDistance);
-        const power = pullClamped * 0.22;
-        const angle = Math.atan2(dy, dx);
+        // Exact gravity step matching Matter.js physics (0.32 px/frame)
+        const gravity = 0.32;
+        const totalSteps = 28;
 
-        let vx = Math.cos(angle) * power;
-        let vy = Math.sin(angle) * power;
-
-        let px = this.player.torso.position.x + 18;
-        let py = this.player.torso.position.y - 12;
-        const dt = 1.0;
-        const g = this.engine.gravity.y * 0.55;
-
-        // Dotted Parabolic Arc
         ctx.save();
-        for (let step = 0; step < 26; step++) {
-          px += vx * dt;
-          vy += g * dt;
-          py += vy * dt;
+        for (let t = 0; t < totalSteps; t++) {
+          const px = aim.startX + aim.vx * t;
+          const py = aim.startY + aim.vy * t + 0.5 * gravity * t * t;
 
-          const dotRadius = Math.max(1.8, 4.5 - step * 0.14);
-          const alpha = Math.max(0.15, 1.0 - step * 0.038);
+          const dotRadius = Math.max(1.8, 4.5 - t * 0.12);
+          const alpha = Math.max(0.15, 1.0 - t * 0.035);
 
           ctx.beginPath();
           ctx.arc(px, py, dotRadius, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(255, 42, 77, ${alpha})`;
-          ctx.shadowColor = '#ff2a4d';
+          // Highlight fatigue with amber, normal with crimson
+          ctx.fillStyle = this.playerStamina < 25 ? `rgba(245, 158, 11, ${alpha})` : `rgba(255, 42, 77, ${alpha})`;
+          ctx.shadowColor = this.playerStamina < 25 ? '#f59e0b' : '#ff2a4d';
           ctx.shadowBlur = 8;
           ctx.fill();
         }
@@ -1821,27 +2049,48 @@
         ctx.shadowBlur = 10;
         ctx.fillText(`🪙 ${this.goldCoins}`, this.virtualW - 32, 48);
 
-        // 3. Top-Left: Player Health Bar
+        // 3. Top-Left: Player Health & Stamina Bars
         if (this.player) {
           const hpPct = Math.max(0, this.player.health / this.player.maxHealth);
+          const stamPct = Math.max(0, this.playerStamina / this.maxStamina);
           const barW = 160;
-          const barH = 10;
           const barX = 32;
-          const barY = 38;
+
+          // Health Bar
+          const hpBarH = 10;
+          const hpBarY = 36;
+          const isPassiveHealing = this.timeSinceLastDamage > 2500 && this.player.health < this.player.maxHealth && !this.player.isDead;
 
           ctx.textAlign = 'left';
-          ctx.fillStyle = '#f8fafc';
-          ctx.font = 'bold 13px "Cinzel", serif';
+          ctx.fillStyle = isPassiveHealing ? '#4ade80' : '#f8fafc';
+          ctx.font = 'bold 12px "Cinzel", serif';
           ctx.shadowBlur = 0;
-          ctx.fillText(`SHINOBI HP`, barX, barY - 6);
+          ctx.fillText(isPassiveHealing ? `SHINOBI HP (+HEALING)` : `SHINOBI HP`, barX, hpBarY - 5);
 
           ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-          ctx.fillRect(barX, barY, barW, barH);
+          ctx.fillRect(barX, hpBarY, barW, hpBarH);
           ctx.fillStyle = hpPct > 0.3 ? '#10b981' : '#ef4444';
-          ctx.fillRect(barX, barY, barW * hpPct, barH);
-          ctx.strokeStyle = '#334155';
-          ctx.lineWidth = 1.5;
-          ctx.strokeRect(barX, barY, barW, barH);
+          ctx.fillRect(barX, hpBarY, barW * hpPct, hpBarH);
+          ctx.strokeStyle = isPassiveHealing ? 'rgba(74, 222, 128, 0.8)' : '#334155';
+          ctx.lineWidth = isPassiveHealing ? 2 : 1.5;
+          ctx.strokeRect(barX, hpBarY, barW, hpBarH);
+
+          // Stamina Bar
+          const stamBarH = 7;
+          const stamBarY = 62;
+          const isFatigued = this.playerStamina < 25;
+
+          ctx.fillStyle = isFatigued ? '#f59e0b' : '#94a3b8';
+          ctx.font = 'bold 11px "Cinzel", serif';
+          ctx.fillText(isFatigued ? `STAMINA (FATIGUED!)` : `STAMINA`, barX, stamBarY - 4);
+
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+          ctx.fillRect(barX, stamBarY, barW, stamBarH);
+          ctx.fillStyle = isFatigued ? '#f59e0b' : '#38bdf8';
+          ctx.fillRect(barX, stamBarY, barW * stamPct, stamBarH);
+          ctx.strokeStyle = isFatigued ? '#b45309' : '#0369a1';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(barX, stamBarY, barW, stamBarH);
         }
 
         ctx.restore();
