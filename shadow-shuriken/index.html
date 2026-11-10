@@ -1,0 +1,1944 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Shadow Shuriken: Rooftop Shinobi</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #08060c;
+      font-family: 'Cinzel', 'Noto Serif JP', 'Georgia', serif;
+      touch-action: none;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    #game-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: #08060c;
+    }
+    canvas {
+      display: block;
+      touch-action: none;
+      cursor: crosshair;
+    }
+  </style>
+  <!-- Matter.js 2D Physics Library (CDN with local fallback) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+  <script>
+    if (typeof Matter === 'undefined') {
+      document.write('<script src="matter.min.js"><\/script>');
+    }
+  </script>
+</head>
+<body>
+  <div id="game-container">
+    <canvas id="game-canvas"></canvas>
+  </div>
+
+  <script>
+  (function() {
+    'use strict';
+
+    // =========================================================================
+    // 1. PROCEDURAL SOUND SYNTHESIZER (Web Audio API)
+    // =========================================================================
+    class SoundEngine {
+      constructor() {
+        this.ctx = null;
+        this.muted = false;
+      }
+      init() {
+        if (!this.ctx) {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          if (AudioContext) {
+            this.ctx = new AudioContext();
+          }
+        }
+        if (this.ctx && this.ctx.state === 'suspended') {
+          this.ctx.resume();
+        }
+      }
+      playThrow() {
+        if (!this.ctx || this.muted) return;
+        const now = this.ctx.currentTime;
+        // White noise whoosh
+        const bufferSize = this.ctx.sampleRate * 0.18;
+        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.35));
+        }
+        const noise = this.ctx.createBufferSource();
+        noise.buffer = buffer;
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.setValueAtTime(2400, now);
+        filter.frequency.exponentialRampToValueAtTime(600, now + 0.18);
+        filter.Q.setValueAtTime(3.0, now);
+
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(0.4, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.18);
+
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.ctx.destination);
+        noise.start(now);
+      }
+      playHit(isHeadshot = false) {
+        if (!this.ctx || this.muted) return;
+        const now = this.ctx.currentTime;
+        if (isHeadshot) {
+          // Deep punch + cinematic ringing harmonic chime
+          const osc1 = this.ctx.createOscillator();
+          const osc2 = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+
+          osc1.type = 'sine';
+          osc1.frequency.setValueAtTime(120, now);
+          osc1.frequency.exponentialRampToValueAtTime(35, now + 0.35);
+
+          osc2.type = 'triangle';
+          osc2.frequency.setValueAtTime(880, now);
+          osc2.frequency.exponentialRampToValueAtTime(520, now + 0.5);
+
+          gain.gain.setValueAtTime(0.8, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+
+          osc1.connect(gain);
+          osc2.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc1.start(now);
+          osc2.start(now);
+          osc1.stop(now + 0.5);
+          osc2.stop(now + 0.5);
+        } else {
+          // Sharp impact slice
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(340, now);
+          osc.frequency.exponentialRampToValueAtTime(80, now + 0.12);
+
+          gain.gain.setValueAtTime(0.35, now);
+          gain.gain.exponentialRampToValueAtTime(0.01, now + 0.12);
+
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.12);
+        }
+      }
+      playDash() {
+        if (!this.ctx || this.muted) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(140, now);
+        osc.frequency.exponentialRampToValueAtTime(360, now + 0.12);
+        osc.frequency.exponentialRampToValueAtTime(90, now + 0.35);
+
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
+
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.35);
+      }
+      playCoin() {
+        if (!this.ctx || this.muted) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(1560, now);
+        osc.frequency.setValueAtTime(2340, now + 0.08);
+
+        gain.gain.setValueAtTime(0.25, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.25);
+      }
+      playDefeat() {
+        if (!this.ctx || this.muted) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(220, now);
+        osc.frequency.exponentialRampToValueAtTime(45, now + 0.8);
+
+        gain.gain.setValueAtTime(0.4, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.8);
+
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.8);
+      }
+    }
+
+    // =========================================================================
+    // 2. VERLET CLOTH SCARF SYSTEM
+    // =========================================================================
+    class CrimsonScarf {
+      constructor(pointCount = 8, segmentLength = 7) {
+        this.pointCount = pointCount;
+        this.segmentLength = segmentLength;
+        this.points = [];
+        for (let i = 0; i < pointCount; i++) {
+          this.points.push({
+            x: 0,
+            y: 0,
+            oldX: 0,
+            oldY: 0
+          });
+        }
+      }
+      init(x, y) {
+        for (let p of this.points) {
+          p.x = x;
+          p.y = y;
+          p.oldX = x;
+          p.oldY = y;
+        }
+      }
+      update(anchorX, anchorY, windX = -1.2, isDashing = false) {
+        // Pin head node
+        this.points[0].x = anchorX;
+        this.points[0].y = anchorY;
+
+        const friction = 0.94;
+        const gravityY = isDashing ? 0.05 : 0.18;
+        const effectiveWindX = isDashing ? -12.0 : windX + Math.sin(Date.now() * 0.008) * 1.4;
+
+        // Verlet integration
+        for (let i = 1; i < this.pointCount; i++) {
+          const p = this.points[i];
+          const vx = (p.x - p.oldX) * friction;
+          const vy = (p.y - p.oldY) * friction;
+          p.oldX = p.x;
+          p.oldY = p.y;
+          p.x += vx + effectiveWindX;
+          p.y += vy + gravityY;
+        }
+
+        // Distance constraint passes
+        const len = this.segmentLength;
+        for (let iter = 0; iter < 4; iter++) {
+          this.points[0].x = anchorX;
+          this.points[0].y = anchorY;
+          for (let i = 0; i < this.pointCount - 1; i++) {
+            const p1 = this.points[i];
+            const p2 = this.points[i + 1];
+            const dx = p2.x - p1.x;
+            const dy = p2.y - p1.y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 0.001;
+            const diff = (dist - len) / dist;
+            if (i === 0) {
+              p2.x -= dx * diff;
+              p2.y -= dy * diff;
+            } else {
+              p1.x += dx * diff * 0.5;
+              p1.y += dy * diff * 0.5;
+              p2.x -= dx * diff * 0.5;
+              p2.y -= dy * diff * 0.5;
+            }
+          }
+        }
+      }
+      render(ctx) {
+        if (this.points.length < 2) return;
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(this.points[0].x, this.points[0].y);
+        for (let i = 1; i < this.points.length - 1; i++) {
+          const xc = (this.points[i].x + this.points[i + 1].x) * 0.5;
+          const yc = (this.points[i].y + this.points[i + 1].y) * 0.5;
+          ctx.quadraticCurveTo(this.points[i].x, this.points[i].y, xc, yc);
+        }
+        const last = this.points[this.points.length - 1];
+        ctx.lineTo(last.x, last.y);
+
+        // Glowing crimson ribbon styling
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        // Outer glow
+        ctx.strokeStyle = 'rgba(255, 42, 77, 0.4)';
+        ctx.lineWidth = 7;
+        ctx.stroke();
+
+        // Inner core
+        ctx.strokeStyle = '#ff2a4d';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+
+        // Highlight spine
+        ctx.strokeStyle = '#ff99aa';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // =========================================================================
+    // 3. MATTER.JS RAGDOLL SHINOBI CREATURE
+    // =========================================================================
+    class ShinobiRagdoll {
+      constructor(engine, x, y, isPlayer = false, options = {}) {
+        this.engine = engine;
+        this.world = engine.world;
+        this.isPlayer = isPlayer;
+        this.homeX = x;
+        this.homeY = y;
+        this.health = options.health || (isPlayer ? 100 : 80);
+        this.maxHealth = this.health;
+        this.isArmored = options.isArmored || false;
+        this.isDead = false;
+        this.isRagdoll = false;
+        this.scarf = isPlayer ? new CrimsonScarf(8, 8) : null;
+        if (this.scarf) this.scarf.init(x, y - 24);
+
+        // Physics Bodies
+        const group = Matter.Body.nextGroup(true);
+        this.collisionGroup = group;
+
+        // Head
+        this.head = Matter.Bodies.circle(x, y - 30, 13, {
+          collisionFilter: { group: group, category: 0x0002 },
+          density: 0.002,
+          friction: 0.8,
+          restitution: 0.1,
+          label: isPlayer ? 'player_head' : 'enemy_head'
+        });
+        this.head.ragdollOwner = this;
+
+        // Torso
+        this.torso = Matter.Bodies.rectangle(x, y - 5, 22, 36, {
+          collisionFilter: { group: group, category: 0x0002 },
+          density: 0.003,
+          friction: 0.8,
+          chamfer: { radius: 5 },
+          label: isPlayer ? 'player_torso' : 'enemy_torso'
+        });
+        this.torso.ragdollOwner = this;
+
+        // Upper Limbs
+        this.leftArm = Matter.Bodies.rectangle(x - 12, y - 10, 8, 22, {
+          collisionFilter: { group: group, category: 0x0002 },
+          density: 0.0015,
+          label: isPlayer ? 'player_limb' : 'enemy_limb'
+        });
+        this.leftArm.ragdollOwner = this;
+
+        this.rightArm = Matter.Bodies.rectangle(x + 12, y - 10, 8, 22, {
+          collisionFilter: { group: group, category: 0x0002 },
+          density: 0.0015,
+          label: isPlayer ? 'player_limb' : 'enemy_limb'
+        });
+        this.rightArm.ragdollOwner = this;
+
+        // Legs
+        this.leftLeg = Matter.Bodies.rectangle(x - 8, y + 24, 10, 26, {
+          collisionFilter: { group: group, category: 0x0002 },
+          density: 0.002,
+          friction: 0.9,
+          label: isPlayer ? 'player_limb' : 'enemy_limb'
+        });
+        this.leftLeg.ragdollOwner = this;
+
+        this.rightLeg = Matter.Bodies.rectangle(x + 8, y + 24, 10, 26, {
+          collisionFilter: { group: group, category: 0x0002 },
+          density: 0.002,
+          friction: 0.9,
+          label: isPlayer ? 'player_limb' : 'enemy_limb'
+        });
+        this.rightLeg.ragdollOwner = this;
+
+        // Constraints
+        this.constraints = [];
+        // Neck
+        this.neck = Matter.Constraint.create({
+          bodyA: this.torso,
+          pointA: { x: 0, y: -18 },
+          bodyB: this.head,
+          pointB: { x: 0, y: 12 },
+          stiffness: 0.92,
+          damping: 0.1
+        });
+        // Shoulders
+        this.leftShoulder = Matter.Constraint.create({
+          bodyA: this.torso,
+          pointA: { x: -10, y: -12 },
+          bodyB: this.leftArm,
+          pointB: { x: 0, y: -9 },
+          stiffness: 0.85,
+          damping: 0.1
+        });
+        this.rightShoulder = Matter.Constraint.create({
+          bodyA: this.torso,
+          pointA: { x: 10, y: -12 },
+          bodyB: this.rightArm,
+          pointB: { x: 0, y: -9 },
+          stiffness: 0.85,
+          damping: 0.1
+        });
+        // Hips
+        this.leftHip = Matter.Constraint.create({
+          bodyA: this.torso,
+          pointA: { x: -6, y: 16 },
+          bodyB: this.leftLeg,
+          pointB: { x: 0, y: -11 },
+          stiffness: 0.88,
+          damping: 0.1
+        });
+        this.rightHip = Matter.Constraint.create({
+          bodyA: this.torso,
+          pointA: { x: 6, y: 16 },
+          bodyB: this.rightLeg,
+          pointB: { x: 0, y: -11 },
+          stiffness: 0.88,
+          damping: 0.1
+        });
+
+        this.constraints = [this.neck, this.leftShoulder, this.rightShoulder, this.leftHip, this.rightHip];
+
+        // Composite container
+        this.composite = Matter.Composite.create();
+        Matter.Composite.add(this.composite, [
+          this.head, this.torso, this.leftArm, this.rightArm, this.leftLeg, this.rightLeg,
+          ...this.constraints
+        ]);
+        Matter.Composite.add(this.world, this.composite);
+      }
+
+      update(time, delta, isDashing = false) {
+        if (this.isDead && this.torso.position.y > 1400) {
+          // Fallen off world
+          return;
+        }
+
+        // Active Upright Balance Stabilizer
+        if (!this.isRagdoll && !this.isDead) {
+          const torsoAngle = this.torso.angle;
+          const angVel = this.torso.angularVelocity;
+          const kp = 0.08;
+          const kd = 0.05;
+          const restorativeTorque = -kp * torsoAngle - kd * angVel;
+
+          Matter.Body.applyForce(this.torso, {
+            x: this.torso.position.x,
+            y: this.torso.position.y - 18
+          }, {
+            x: restorativeTorque * 0.015,
+            y: 0
+          });
+
+          // Feet grounded spring to home perch
+          const dx = this.homeX - this.torso.position.x;
+          if (Math.abs(dx) > 1) {
+            Matter.Body.applyForce(this.torso, this.torso.position, {
+              x: dx * 0.0008,
+              y: 0
+            });
+          }
+
+          // Gentle pose stabilization
+          Matter.Body.setAngularVelocity(this.head, -this.head.angle * 0.2);
+        }
+
+        // Scarf update
+        if (this.scarf) {
+          const neckPos = {
+            x: this.torso.position.x - (this.isPlayer ? 8 : -8),
+            y: this.torso.position.y - 18
+          };
+          this.scarf.update(neckPos.x, neckPos.y, this.isPlayer ? -2.2 : 2.2, isDashing);
+        }
+      }
+
+      applyHit(damage, hitBody, impulseForce = { x: 0, y: 0 }, isHeadshot = false) {
+        if (this.isDead) return { defeated: false, isHeadshot: false };
+
+        if (this.isArmored && !isHeadshot && this.health > 40) {
+          // Armor deflects portion of damage
+          damage = Math.floor(damage * 0.5);
+        }
+
+        this.health -= damage;
+
+        // Physical impulse
+        if (hitBody && hitBody.position) {
+          Matter.Body.applyForce(hitBody, hitBody.position, impulseForce);
+        }
+
+        if (isHeadshot || this.health <= 0) {
+          this.health = 0;
+          this.triggerRagdollDefeat(impulseForce);
+          return { defeated: true, isHeadshot: isHeadshot };
+        }
+
+        // Non-lethal hit wobble
+        Matter.Body.applyForce(this.torso, this.torso.position, {
+          x: impulseForce.x * 0.5,
+          y: impulseForce.y * 0.5 - 0.01
+        });
+        return { defeated: false, isHeadshot: false };
+      }
+
+      triggerRagdollDefeat(impulse = { x: 0, y: 0 }) {
+        this.isDead = true;
+        this.isRagdoll = true;
+
+        // Loosen joints for floppy cartoon ragdoll physics
+        for (let c of this.constraints) {
+          c.stiffness = 0.25;
+          c.damping = 0.02;
+        }
+
+        // Apply violent tumbling impulse
+        const flingX = impulse.x * 2.2 || (this.isPlayer ? -0.04 : 0.04);
+        const flingY = -0.035 + (impulse.y * 1.5 || 0);
+
+        Matter.Body.applyForce(this.torso, this.torso.position, { x: flingX, y: flingY });
+        Matter.Body.setAngularVelocity(this.torso, (Math.random() > 0.5 ? 1 : -1) * 0.25);
+        Matter.Body.setAngularVelocity(this.head, (Math.random() > 0.5 ? 1 : -1) * 0.35);
+      }
+
+      render(ctx) {
+        ctx.save();
+
+        const silhouetteColor = '#111115';
+        const outlineColor = this.isPlayer ? '#2a2a38' : '#331a22';
+
+        // Render Scarf first (behind ninja)
+        if (this.scarf) {
+          this.scarf.render(ctx);
+        }
+
+        // Helper: render rotated rounded box
+        const drawBodyBox = (body, w, h, radius = 4, color = silhouetteColor) => {
+          ctx.save();
+          ctx.translate(body.position.x, body.position.y);
+          ctx.rotate(body.angle);
+          ctx.beginPath();
+          ctx.roundRect(-w / 2, -h / 2, w, h, radius);
+          ctx.fillStyle = color;
+          ctx.fill();
+          ctx.strokeStyle = outlineColor;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          // Subtle rim light
+          ctx.strokeStyle = this.isPlayer ? 'rgba(255, 42, 77, 0.4)' : 'rgba(168, 85, 247, 0.4)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.restore();
+        };
+
+        // Limbs
+        drawBodyBox(this.leftLeg, 10, 26, 4);
+        drawBodyBox(this.rightLeg, 10, 26, 4);
+        drawBodyBox(this.leftArm, 8, 22, 3);
+        drawBodyBox(this.rightArm, 8, 22, 3);
+
+        // Torso
+        drawBodyBox(this.torso, 22, 36, 6);
+
+        // Armor plate if equipped
+        if (this.isArmored && !this.isDead) {
+          ctx.save();
+          ctx.translate(this.torso.position.x, this.torso.position.y);
+          ctx.rotate(this.torso.angle);
+          ctx.fillStyle = '#475569';
+          ctx.fillRect(-12, -14, 24, 18);
+          ctx.strokeStyle = '#94a3b8';
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(-12, -14, 24, 18);
+          ctx.fillStyle = '#f59e0b';
+          ctx.fillRect(-4, -6, 8, 4);
+          ctx.restore();
+        }
+
+        // Head
+        ctx.save();
+        ctx.translate(this.head.position.x, this.head.position.y);
+        ctx.rotate(this.head.angle);
+        ctx.beginPath();
+        ctx.arc(0, 0, 13, 0, Math.PI * 2);
+        ctx.fillStyle = silhouetteColor;
+        ctx.fill();
+        ctx.strokeStyle = outlineColor;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Glowing Shinobi Eyes / Mask Slot
+        if (!this.isDead) {
+          const eyeOffset = this.isPlayer ? 4 : -4;
+          ctx.fillStyle = this.isPlayer ? '#ff2a4d' : '#e11d48';
+          ctx.shadowColor = this.isPlayer ? '#ff2a4d' : '#f43f5e';
+          ctx.shadowBlur = 8;
+          ctx.beginPath();
+          ctx.ellipse(eyeOffset, -2, 3.5, 1.8, this.isPlayer ? -0.1 : 0.1, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+
+          // Headband ribbon knots
+          ctx.fillStyle = this.isPlayer ? '#ff2a4d' : '#881337';
+          ctx.fillRect(eyeOffset > 0 ? -12 : 6, -5, 6, 3);
+        } else {
+          // Defeated 'X' eyes
+          ctx.strokeStyle = '#ef4444';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(-4, -4); ctx.lineTo(0, 0);
+          ctx.moveTo(0, -4); ctx.lineTo(-4, 0);
+          ctx.moveTo(2, -4); ctx.lineTo(6, 0);
+          ctx.moveTo(6, -4); ctx.lineTo(2, 0);
+          ctx.stroke();
+        }
+        ctx.restore();
+
+        // Health Bar above alive characters
+        if (!this.isDead && this.health < this.maxHealth) {
+          const hpBarW = 34;
+          const hpBarH = 4;
+          const barX = this.torso.position.x - hpBarW / 2;
+          const barY = this.head.position.y - 24;
+          const pct = Math.max(0, this.health / this.maxHealth);
+
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+          ctx.fillRect(barX - 1, barY - 1, hpBarW + 2, hpBarH + 2);
+          ctx.fillStyle = this.isPlayer ? '#10b981' : '#f43f5e';
+          ctx.fillRect(barX, barY, hpBarW * pct, hpBarH);
+        }
+
+        ctx.restore();
+      }
+
+      destroy() {
+        Matter.Composite.remove(this.world, this.composite);
+      }
+    }
+
+    // =========================================================================
+    // 4. SHURIKEN PROJECTILE
+    // =========================================================================
+    class Shuriken {
+      constructor(engine, x, y, vx, vy, isPlayer = true) {
+        this.engine = engine;
+        this.world = engine.world;
+        this.isPlayer = isPlayer;
+        this.isStuck = false;
+        this.stuckTarget = null;
+        this.stuckOffset = { x: 0, y: 0 };
+        this.stuckAngle = 0;
+        this.trail = [];
+        this.lifeTime = 0;
+        this.radius = 11;
+
+        this.body = Matter.Bodies.circle(x, y, this.radius, {
+          density: 0.005,
+          friction: 0.2,
+          frictionAir: 0.003,
+          restitution: 0.2,
+          label: isPlayer ? 'shuriken_player' : 'shuriken_enemy'
+        });
+        this.body.shurikenRef = this;
+
+        Matter.Body.setVelocity(this.body, { x: vx, y: vy });
+        Matter.Body.setAngularVelocity(this.body, (vx >= 0 ? 1 : -1) * 0.42);
+        Matter.Composite.add(this.world, this.body);
+      }
+
+      update(time, delta) {
+        this.lifeTime += delta;
+        if (this.isStuck && this.stuckTarget && this.stuckTarget.position) {
+          // Attached to hit ragdoll part
+          const cos = Math.cos(this.stuckTarget.angle);
+          const sin = Math.sin(this.stuckTarget.angle);
+          const px = this.stuckTarget.position.x + (this.stuckOffset.x * cos - this.stuckOffset.y * sin);
+          const py = this.stuckTarget.position.y + (this.stuckOffset.x * sin + this.stuckOffset.y * cos);
+          Matter.Body.setPosition(this.body, { x: px, y: py });
+          Matter.Body.setAngle(this.body, this.stuckTarget.angle + this.stuckAngle);
+          return;
+        }
+
+        // Record trailing glowing positions
+        this.trail.push({
+          x: this.body.position.x,
+          y: this.body.position.y,
+          alpha: 1.0
+        });
+        if (this.trail.length > 9) this.trail.shift();
+      }
+
+      stickTo(targetBody) {
+        this.isStuck = true;
+        this.stuckTarget = targetBody;
+        const cos = Math.cos(-targetBody.angle);
+        const sin = Math.sin(-targetBody.angle);
+        const dx = this.body.position.x - targetBody.position.x;
+        const dy = this.body.position.y - targetBody.position.y;
+        this.stuckOffset = {
+          x: dx * cos - dy * sin,
+          y: dx * sin + dy * cos
+        };
+        this.stuckAngle = this.body.angle - targetBody.angle;
+        this.body.isSensor = true;
+        Matter.Body.setVelocity(this.body, { x: 0, y: 0 });
+        Matter.Body.setAngularVelocity(this.body, 0);
+      }
+
+      render(ctx) {
+        // Glowing motion trail
+        if (this.trail.length > 1 && !this.isStuck) {
+          ctx.save();
+          for (let i = 0; i < this.trail.length - 1; i++) {
+            const p1 = this.trail[i];
+            const p2 = this.trail[i + 1];
+            const pct = i / this.trail.length;
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.strokeStyle = this.isPlayer ? `rgba(255, 42, 77, ${pct * 0.7})` : `rgba(168, 85, 247, ${pct * 0.7})`;
+            ctx.lineWidth = pct * 5.0;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+
+        // Draw 4-point iron shuriken
+        ctx.save();
+        ctx.translate(this.body.position.x, this.body.position.y);
+        ctx.rotate(this.body.angle);
+
+        const r = this.radius;
+        const coreR = r * 0.32;
+
+        ctx.shadowColor = this.isPlayer ? '#ff2a4d' : '#a855f7';
+        ctx.shadowBlur = 10;
+
+        ctx.beginPath();
+        for (let i = 0; i < 4; i++) {
+          const angle = (i * Math.PI) / 2;
+          const nextAngle = ((i + 1) * Math.PI) / 2;
+          const midAngle = angle + Math.PI / 4;
+
+          const tipX = Math.cos(angle) * r;
+          const tipY = Math.sin(angle) * r;
+
+          const innerX = Math.cos(midAngle) * coreR;
+          const innerY = Math.sin(midAngle) * coreR;
+
+          if (i === 0) ctx.moveTo(tipX, tipY);
+          else ctx.lineTo(tipX, tipY);
+          ctx.lineTo(innerX, innerY);
+        }
+        ctx.closePath();
+
+        // Dark obsidian iron body
+        ctx.fillStyle = '#1e1b29';
+        ctx.fill();
+
+        // Razor bevels
+        ctx.strokeStyle = this.isPlayer ? '#ff2a4d' : '#c084fc';
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+
+        // Center hub brass ring
+        ctx.beginPath();
+        ctx.arc(0, 0, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#fbbf24';
+        ctx.fill();
+
+        ctx.restore();
+      }
+
+      destroy() {
+        Matter.Composite.remove(this.world, this.body);
+      }
+    }
+
+    // =========================================================================
+    // 5. PROCEDURAL JAPANESE ROOFTOP PLATFORM
+    // =========================================================================
+    class RooftopPlatform {
+      constructor(engine, x, y, width, height) {
+        this.engine = engine;
+        this.world = engine.world;
+        this.x = x;
+        this.y = y;
+        this.width = width;
+        this.height = height;
+
+        // Static Matter.js body
+        this.body = Matter.Bodies.rectangle(x + width / 2, y + height / 2, width, height, {
+          isStatic: true,
+          friction: 0.9,
+          label: 'platform'
+        });
+        Matter.Composite.add(this.world, this.body);
+
+        // Hanging Paper Lanterns
+        this.lanterns = [];
+        if (width > 180) {
+          this.lanterns.push({
+            x: x + 24,
+            y: y + 8,
+            swingAngle: Math.random() * Math.PI
+          });
+          this.lanterns.push({
+            x: x + width - 24,
+            y: y + 8,
+            swingAngle: Math.random() * Math.PI + 1
+          });
+        }
+      }
+
+      render(ctx) {
+        ctx.save();
+        const x = this.x;
+        const y = this.y;
+        const w = this.width;
+        const h = this.height;
+
+        // 1. Classical Japanese Pagoda Curved Roof Eaves
+        ctx.fillStyle = '#0e0e14';
+        ctx.strokeStyle = '#222230';
+        ctx.lineWidth = 2;
+
+        ctx.beginPath();
+        // Top tiled ridge with curved ends (splay)
+        ctx.moveTo(x - 20, y - 6);
+        ctx.quadraticCurveTo(x + w * 0.25, y - 2, x + w * 0.5, y - 4);
+        ctx.quadraticCurveTo(x + w * 0.75, y - 2, x + w + 20, y - 6);
+        // Eave tip drop
+        ctx.lineTo(x + w + 16, y + 14);
+        // Under eave curve
+        ctx.lineTo(x + w - 10, y + 18);
+        ctx.lineTo(x + 10, y + 18);
+        ctx.lineTo(x - 16, y + 14);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // Glowing red lacquer under-trim
+        ctx.strokeStyle = '#991b1b';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(x - 12, y + 15);
+        ctx.lineTo(x + w + 12, y + 15);
+        ctx.stroke();
+
+        // 2. Main Wall Tower Silhouette
+        ctx.fillStyle = '#09080e';
+        ctx.fillRect(x + 10, y + 18, w - 20, h - 18);
+
+        // Wooden lattice window slits
+        ctx.fillStyle = 'rgba(251, 191, 36, 0.15)';
+        const winCols = Math.floor((w - 40) / 35);
+        for (let i = 0; i < winCols; i++) {
+          const wx = x + 25 + i * 35;
+          ctx.fillRect(wx, y + 36, 18, 28);
+          // Lattice bars
+          ctx.strokeStyle = '#09080e';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(wx, y + 36, 18, 28);
+          ctx.beginPath();
+          ctx.moveTo(wx + 9, y + 36); ctx.lineTo(wx + 9, y + 64);
+          ctx.moveTo(wx, y + 50); ctx.lineTo(wx + 18, y + 50);
+          ctx.stroke();
+        }
+
+        // 3. Hanging Lanterns
+        const now = Date.now() * 0.003;
+        for (let l of this.lanterns) {
+          const swing = Math.sin(now + l.swingAngle) * 0.12;
+          ctx.save();
+          ctx.translate(l.x, l.y);
+          ctx.rotate(swing);
+
+          // Cord
+          ctx.strokeStyle = '#374151';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(0, 0); ctx.lineTo(0, 16);
+          ctx.stroke();
+
+          // Amber Glowing Paper Lantern
+          ctx.shadowColor = '#f59e0b';
+          ctx.shadowBlur = 14;
+          ctx.fillStyle = '#f59e0b';
+          ctx.fillRect(-7, 16, 14, 20);
+
+          ctx.fillStyle = '#78350f';
+          ctx.fillRect(-8, 14, 16, 3);
+          ctx.fillRect(-8, 35, 16, 3);
+
+          // Soft kanji silhouette in lantern
+          ctx.fillStyle = '#451a03';
+          ctx.fillRect(-3, 22, 6, 8);
+
+          ctx.restore();
+        }
+
+        ctx.restore();
+      }
+
+      destroy() {
+        Matter.Composite.remove(this.world, this.body);
+      }
+    }
+
+    // =========================================================================
+    // 6. ATMOSPHERIC PARTICLES: SAKURA (Cherry Blossom) & EMBERS
+    // =========================================================================
+    class ParticleManager {
+      constructor(canvasWidth, canvasHeight) {
+        this.width = canvasWidth;
+        this.height = canvasHeight;
+        this.petals = [];
+        this.sparks = [];
+
+        // Spawn sakura petals
+        for (let i = 0; i < 45; i++) {
+          this.petals.push({
+            x: Math.random() * canvasWidth,
+            y: Math.random() * canvasHeight,
+            speedX: -0.8 - Math.random() * 1.4,
+            speedY: 0.6 + Math.random() * 1.0,
+            angle: Math.random() * Math.PI * 2,
+            rotSpeed: (Math.random() - 0.5) * 0.04,
+            size: 5 + Math.random() * 4,
+            opacity: 0.4 + Math.random() * 0.5
+          });
+        }
+      }
+
+      resize(w, h) {
+        this.width = w;
+        this.height = h;
+      }
+
+      spawnImpactSparks(x, y, count = 16, isCrit = false) {
+        for (let i = 0; i < count; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 2 + Math.random() * (isCrit ? 9 : 6);
+          this.sparks.push({
+            x: x,
+            y: y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed - 1.5,
+            color: isCrit ? '#fbbf24' : '#ff2a4d',
+            size: isCrit ? 3.5 : 2.5,
+            alpha: 1.0,
+            decay: 0.025 + Math.random() * 0.035
+          });
+        }
+      }
+
+      update() {
+        // Petals
+        for (let p of this.petals) {
+          p.x += p.speedX + Math.sin(Date.now() * 0.002 + p.y * 0.01) * 0.5;
+          p.y += p.speedY;
+          p.angle += p.rotSpeed;
+          if (p.x < -20) p.x = this.width + 20;
+          if (p.y > this.height + 20) {
+            p.y = -20;
+            p.x = Math.random() * this.width;
+          }
+        }
+        // Sparks
+        for (let i = this.sparks.length - 1; i >= 0; i--) {
+          const s = this.sparks[i];
+          s.x += s.vx;
+          s.y += s.vy;
+          s.vy += 0.15; // Gravity
+          s.alpha -= s.decay;
+          if (s.alpha <= 0) {
+            this.sparks.splice(i, 1);
+          }
+        }
+      }
+
+      render(ctx) {
+        ctx.save();
+        // Render Sakura Petals
+        for (let p of this.petals) {
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.angle);
+          ctx.fillStyle = `rgba(255, 138, 174, ${p.opacity})`;
+          ctx.beginPath();
+          ctx.ellipse(0, 0, p.size, p.size * 0.55, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        // Render Sparks
+        for (let s of this.sparks) {
+          ctx.fillStyle = s.color;
+          ctx.globalAlpha = Math.max(0, s.alpha);
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+    }
+
+    // =========================================================================
+    // 7. MAIN GAME CONTROLLER & SCENE MANAGEMENT
+    // =========================================================================
+    class ShadowShurikenGame {
+      constructor() {
+        this.canvas = document.getElementById('game-canvas');
+        this.ctx = this.canvas.getContext('2d');
+
+        this.virtualW = 1280;
+        this.virtualH = 720;
+        this.scaleRatio = 1;
+        this.offsetX = 0;
+        this.offsetY = 0;
+
+        // Sound System
+        this.sounds = new SoundEngine();
+
+        // Game States: 'START', 'PLAYING', 'AUTO_DASH', 'GAME_OVER'
+        this.gameState = 'START';
+
+        // Progression Tracking
+        this.distanceMeters = 0;
+        this.bestDistance = parseInt(localStorage.getItem('rooftop_shinobi_best') || '0', 10);
+        this.goldCoins = 0;
+        this.kills = 0;
+        this.headshots = 0;
+
+        // Camera scroll
+        this.cameraX = 0;
+        this.targetCameraX = 0;
+
+        // Input & Drag-to-Aim
+        this.isAiming = false;
+        this.pointerStart = { x: 0, y: 0 };
+        this.pointerCurrent = { x: 0, y: 0 };
+        this.aimVector = { x: 0, y: 0 };
+        this.maxPullDistance = 140;
+
+        // Floating Text Popups
+        this.popups = [];
+
+        // Setup Physics World
+        this.initPhysics();
+
+        // Setup Entities
+        this.player = null;
+        this.enemies = [];
+        this.platforms = [];
+        this.projectiles = [];
+
+        // Particles
+        this.particles = new ParticleManager(this.virtualW, this.virtualH);
+
+        // Bind Window Events
+        this.setupEvents();
+        this.resize();
+
+        // Check URL preview param
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('play') === '1' || urlParams.get('preview') === '1') {
+          this.startNewGame();
+          if (urlParams.get('aim') === '1') {
+            this.isAiming = true;
+            this.pointerStart = { x: 300, y: 420 };
+            this.pointerCurrent = { x: 210, y: 490 };
+          }
+        }
+
+        // Enemy AI Interval
+        this.enemyAimTimer = 0;
+        this.enemyTelegraphLine = null;
+
+        // Start Loop
+        this.lastTime = performance.now();
+        requestAnimationFrame((t) => this.gameLoop(t));
+      }
+
+      initPhysics() {
+        this.engine = Matter.Engine.create({
+          enableSleeping: false
+        });
+        this.engine.gravity.y = 1.05;
+
+        // Collision Handler
+        Matter.Events.on(this.engine, 'collisionStart', (e) => this.handleCollisions(e));
+      }
+
+      setupEvents() {
+        window.addEventListener('resize', () => this.resize());
+
+        // Pointer Controls (Single Mouse & Single Touch Unified)
+        const onDown = (e) => {
+          this.sounds.init();
+          const pos = this.getCanvasPointerPos(e);
+
+          if (this.gameState === 'START') {
+            this.startNewGame();
+            return;
+          }
+
+          if (this.gameState === 'GAME_OVER') {
+            // Check play again button click
+            const btnW = 220, btnH = 55;
+            const btnX = this.virtualW / 2 - btnW / 2;
+            const btnY = this.virtualH / 2 + 105;
+            if (pos.x >= btnX && pos.x <= btnX + btnW && pos.y >= btnY && pos.y <= btnY + btnH) {
+              this.startNewGame();
+            }
+            return;
+          }
+
+          if (this.gameState === 'PLAYING' && this.player && !this.player.isDead) {
+            this.isAiming = true;
+            this.pointerStart = { x: pos.x, y: pos.y };
+            this.pointerCurrent = { x: pos.x, y: pos.y };
+          }
+        };
+
+        const onMove = (e) => {
+          if (!this.isAiming) return;
+          this.pointerCurrent = this.getCanvasPointerPos(e);
+        };
+
+        const onUp = (e) => {
+          if (!this.isAiming) return;
+          this.isAiming = false;
+
+          // Calculate launch impulse from pull-back vector
+          const dx = this.pointerStart.x - this.pointerCurrent.x;
+          const dy = this.pointerStart.y - this.pointerCurrent.y;
+          const pullDist = Math.sqrt(dx * dx + dy * dy);
+
+          if (pullDist > 18 && this.player && !this.player.isDead) {
+            const pullClamped = Math.min(pullDist, this.maxPullDistance);
+            const power = pullClamped * 0.22;
+            const angle = Math.atan2(dy, dx);
+
+            const vx = Math.cos(angle) * power;
+            const vy = Math.sin(angle) * power;
+
+            // Spawn player shuriken
+            const spawnX = this.player.torso.position.x + 18;
+            const spawnY = this.player.torso.position.y - 12;
+            const shuriken = new Shuriken(this.engine, spawnX, spawnY, vx, vy, true);
+            this.projectiles.push(shuriken);
+            this.sounds.playThrow();
+          }
+        };
+
+        this.canvas.addEventListener('pointerdown', onDown);
+        this.canvas.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onUp);
+      }
+
+      getCanvasPointerPos(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        const clientX = e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+        const clientY = e.clientY !== undefined ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
+
+        const x = (clientX - rect.left - this.offsetX) / this.scaleRatio;
+        const y = (clientY - rect.top - this.offsetY) / this.scaleRatio;
+        return { x, y };
+      }
+
+      resize() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        this.canvas.width = w;
+        this.canvas.height = h;
+
+        // Maintain 16:9 widescreen virtual ratio
+        const targetRatio = this.virtualW / this.virtualH;
+        const currentRatio = w / h;
+
+        if (currentRatio > targetRatio) {
+          this.scaleRatio = h / this.virtualH;
+          this.offsetX = (w - this.virtualW * this.scaleRatio) / 2;
+          this.offsetY = 0;
+        } else {
+          this.scaleRatio = w / this.virtualW;
+          this.offsetX = 0;
+          this.offsetY = (h - this.virtualH * this.scaleRatio) / 2;
+        }
+
+        if (this.particles) {
+          this.particles.resize(this.virtualW, this.virtualH);
+        }
+      }
+
+      startNewGame() {
+        // Clear old entities
+        if (this.player) this.player.destroy();
+        for (let e of this.enemies) e.destroy();
+        for (let p of this.platforms) p.destroy();
+        for (let s of this.projectiles) s.destroy();
+
+        this.player = null;
+        this.enemies = [];
+        this.platforms = [];
+        this.projectiles = [];
+        this.popups = [];
+
+        this.distanceMeters = 0;
+        this.goldCoins = 0;
+        this.kills = 0;
+        this.headshots = 0;
+        this.cameraX = 0;
+        this.targetCameraX = 0;
+
+        // Build Initial Rooftops
+        this.spawnEncounter(0);
+
+        this.gameState = 'PLAYING';
+      }
+
+      spawnEncounter(currentRooftopStartX) {
+        // Platform 1: Player Rooftop
+        const playerPlatformW = 280;
+        const playerPlatformH = 260;
+        const playerY = 490;
+        const p1 = new RooftopPlatform(this.engine, currentRooftopStartX + 80, playerY, playerPlatformW, playerPlatformH);
+        this.platforms.push(p1);
+
+        // Spawn or reposition Player
+        const playerSpawnX = currentRooftopStartX + 220;
+        const playerSpawnY = playerY - 32;
+        if (!this.player) {
+          this.player = new ShinobiRagdoll(this.engine, playerSpawnX, playerSpawnY, true, { health: 100 });
+        } else {
+          this.player.homeX = playerSpawnX;
+          this.player.homeY = playerSpawnY;
+          Matter.Body.setPosition(this.player.torso, { x: playerSpawnX, y: playerSpawnY });
+          Matter.Body.setVelocity(this.player.torso, { x: 0, y: 0 });
+        }
+
+        // Platform 2: Opponent Rooftop (Distance Scaled)
+        const distanceTier = this.distanceMeters;
+        const gap = 380 + Math.min(distanceTier * 0.4, 220) + (Math.random() * 60 - 30);
+        const enemyX = currentRooftopStartX + playerPlatformW + gap;
+
+        // Variable Elevation (+/- 75px based on distance)
+        let elevOffset = 0;
+        if (distanceTier > 100) {
+          elevOffset = (Math.random() - 0.5) * Math.min(distanceTier * 0.35, 120);
+        }
+        const enemyPlatformY = Math.min(540, Math.max(380, playerY + elevOffset));
+        const enemyPlatformW = 260;
+        const p2 = new RooftopPlatform(this.engine, enemyX, enemyPlatformY, enemyPlatformW, 300);
+        this.platforms.push(p2);
+
+        // Spawn Enemy Shinobi
+        const isArmored = distanceTier >= 250 && Math.random() > 0.45;
+        const enemyHealth = distanceTier > 300 ? 110 : (distanceTier > 120 ? 90 : 70);
+        const enemyNinja = new ShinobiRagdoll(this.engine, enemyX + 80, enemyPlatformY - 32, false, {
+          health: enemyHealth,
+          isArmored: isArmored
+        });
+        this.enemies.push(enemyNinja);
+
+        // Second staggered enemy on high distance tiers (250m+)
+        if (distanceTier >= 350 && Math.random() > 0.5) {
+          const p3 = new RooftopPlatform(this.engine, enemyX + enemyPlatformW + 140, enemyPlatformY - 70, 190, 360);
+          this.platforms.push(p3);
+          const enemy2 = new ShinobiRagdoll(this.engine, enemyX + enemyPlatformW + 210, enemyPlatformY - 102, false, {
+            health: 60,
+            isArmored: false
+          });
+          this.enemies.push(enemy2);
+        }
+
+        // Reset enemy attack timer
+        this.resetEnemyTimer();
+      }
+
+      resetEnemyTimer() {
+        // Scaled aim interval
+        const dist = this.distanceMeters;
+        if (dist < 100) {
+          this.enemyAimTimer = 3400 + Math.random() * 800; // Slow, beginner-friendly
+        } else if (dist < 250) {
+          this.enemyAimTimer = 2500 + Math.random() * 600;
+        } else {
+          this.enemyAimTimer = 1900 + Math.random() * 500; // Fast elite
+        }
+      }
+
+      handleCollisions(event) {
+        const pairs = event.pairs;
+        for (let pair of pairs) {
+          const bodyA = pair.bodyA;
+          const bodyB = pair.bodyB;
+
+          // Check Shuriken hits
+          const shurikenBody = bodyA.shurikenRef ? bodyA : (bodyB.shurikenRef ? bodyB : null);
+          const targetBody = bodyA === shurikenBody ? bodyB : bodyA;
+
+          if (shurikenBody && targetBody) {
+            const shuriken = shurikenBody.shurikenRef;
+            if (shuriken.isStuck) continue;
+
+            const ragdoll = targetBody.ragdollOwner;
+
+            // Player Shuriken hitting Enemy
+            if (shuriken.isPlayer && ragdoll && !ragdoll.isPlayer && !ragdoll.isDead) {
+              const isHeadshot = targetBody.label === 'enemy_head';
+              const damage = isHeadshot ? 999 : (targetBody.label === 'enemy_torso' ? 45 : 30);
+
+              const hitVx = shurikenBody.velocity.x * 0.003;
+              const hitVy = shurikenBody.velocity.y * 0.003 - 0.01;
+
+              const res = ragdoll.applyHit(damage, targetBody, { x: hitVx, y: hitVy }, isHeadshot);
+              shuriken.stickTo(targetBody);
+
+              // Effects
+              this.particles.spawnImpactSparks(shurikenBody.position.x, shurikenBody.position.y, isHeadshot ? 28 : 14, isHeadshot);
+              this.sounds.playHit(isHeadshot);
+
+              if (isHeadshot) {
+                this.headshots++;
+                this.addPopup(targetBody.position.x, targetBody.position.y - 25, 'CRITICAL HEADSHOT!', '#fbbf24', true);
+                const coinReward = 20;
+                this.goldCoins += coinReward;
+                this.sounds.playCoin();
+                this.addPopup(targetBody.position.x, targetBody.position.y - 50, `+${coinReward} COINS`, '#f59e0b');
+              } else {
+                this.addPopup(targetBody.position.x, targetBody.position.y - 25, `-${damage}`, '#f43f5e');
+                if (res.defeated) {
+                  const coinReward = 10;
+                  this.goldCoins += coinReward;
+                  this.sounds.playCoin();
+                  this.addPopup(targetBody.position.x, targetBody.position.y - 50, `+${coinReward} COINS`, '#f59e0b');
+                }
+              }
+
+              // Check if all enemies in encounter are cleared
+              this.checkEncounterCleared();
+            }
+
+            // Enemy Shuriken hitting Player
+            if (!shuriken.isPlayer && ragdoll && ragdoll.isPlayer && !ragdoll.isDead) {
+              const isHeadshot = targetBody.label === 'player_head';
+              const damage = isHeadshot ? 65 : 30;
+
+              const hitVx = shurikenBody.velocity.x * 0.003;
+              const hitVy = shurikenBody.velocity.y * 0.003 - 0.01;
+
+              ragdoll.applyHit(damage, targetBody, { x: hitVx, y: hitVy }, isHeadshot);
+              shuriken.stickTo(targetBody);
+
+              this.particles.spawnImpactSparks(shurikenBody.position.x, shurikenBody.position.y, 16, isHeadshot);
+              this.sounds.playHit(isHeadshot);
+              this.addPopup(targetBody.position.x, targetBody.position.y - 25, `-${damage}`, '#ef4444');
+
+              if (ragdoll.isDead) {
+                this.triggerGameOver();
+              }
+            }
+
+            // Shuriken hitting Rooftop Tile
+            if (targetBody.label === 'platform') {
+              shuriken.isStuck = true;
+              Matter.Body.setVelocity(shuriken.body, { x: 0, y: 0 });
+              Matter.Body.setAngularVelocity(shuriken.body, 0);
+              this.particles.spawnImpactSparks(shurikenBody.position.x, shurikenBody.position.y, 6, false);
+            }
+          }
+        }
+      }
+
+      checkEncounterCleared() {
+        const allEnemiesDefeated = this.enemies.every(e => e.isDead);
+        if (allEnemiesDefeated && this.gameState === 'PLAYING') {
+          this.kills++;
+          // Trigger Auto-Dash to next rooftop
+          setTimeout(() => {
+            if (this.gameState === 'PLAYING') {
+              this.startAutoDash();
+            }
+          }, 450);
+        }
+      }
+
+      startAutoDash() {
+        this.gameState = 'AUTO_DASH';
+        this.sounds.playDash();
+
+        // Increment Distance (+38m to +50m per cleared rooftop)
+        const distanceGain = 42 + Math.floor(Math.random() * 10);
+        this.distanceMeters += distanceGain;
+
+        if (this.distanceMeters > this.bestDistance) {
+          this.bestDistance = this.distanceMeters;
+          localStorage.setItem('rooftop_shinobi_best', this.bestDistance.toString());
+        }
+
+        // Camera target moves to right platform
+        const nextPlatform = this.platforms[this.platforms.length - 1];
+        const nextX = nextPlatform ? nextPlatform.x - 120 : this.cameraX + 500;
+        this.targetCameraX = nextX;
+      }
+
+      onArriveAtNextRooftop() {
+        this.gameState = 'PLAYING';
+
+        // Clean up far left offscreen entities to keep performance locked at 60 FPS
+        const cutoffX = this.cameraX - 600;
+        this.platforms = this.platforms.filter(p => {
+          if (p.x + p.width < cutoffX) {
+            p.destroy();
+            return false;
+          }
+          return true;
+        });
+        this.enemies = this.enemies.filter(e => {
+          if (e.homeX < cutoffX) {
+            e.destroy();
+            return false;
+          }
+          return true;
+        });
+
+        // Spawn next forward encounter ahead
+        this.spawnEncounter(this.cameraX + 80);
+      }
+
+      triggerGameOver() {
+        if (this.gameState === 'GAME_OVER') return;
+        this.gameState = 'GAME_OVER';
+        this.sounds.playDefeat();
+
+        if (this.distanceMeters > this.bestDistance) {
+          this.bestDistance = this.distanceMeters;
+          localStorage.setItem('rooftop_shinobi_best', this.bestDistance.toString());
+        }
+      }
+
+      addPopup(x, y, text, color = '#ff2a4d', isCrit = false) {
+        this.popups.push({
+          x: x,
+          y: y,
+          text: text,
+          color: color,
+          isCrit: isCrit,
+          alpha: 1.0,
+          scale: isCrit ? 1.4 : 1.0,
+          vy: -1.4
+        });
+      }
+
+      updateAI(delta) {
+        if (this.gameState !== 'PLAYING' || !this.player || this.player.isDead) {
+          this.enemyTelegraphLine = null;
+          return;
+        }
+
+        const activeEnemy = this.enemies.find(e => !e.isDead);
+        if (!activeEnemy) {
+          this.enemyTelegraphLine = null;
+          return;
+        }
+
+        this.enemyAimTimer -= delta;
+
+        // Telegraph aiming line in the final 1.1s before firing
+        if (this.enemyAimTimer <= 1100 && this.enemyAimTimer > 0) {
+          this.enemyTelegraphLine = {
+            startX: activeEnemy.torso.position.x - 16,
+            startY: activeEnemy.torso.position.y - 8,
+            targetX: this.player.torso.position.x,
+            targetY: this.player.torso.position.y,
+            alpha: Math.abs(Math.sin(Date.now() * 0.012)) * 0.85
+          };
+        } else {
+          this.enemyTelegraphLine = null;
+        }
+
+        if (this.enemyAimTimer <= 0) {
+          // Fire enemy shuriken
+          const startX = activeEnemy.torso.position.x - 20;
+          const startY = activeEnemy.torso.position.y - 10;
+          const targetX = this.player.torso.position.x + (Math.random() * 24 - 12);
+          const targetY = this.player.torso.position.y - 12 + (Math.random() * 20 - 10);
+
+          const dx = targetX - startX;
+          const dy = targetY - startY;
+
+          // Ballistic arc calculation
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const speed = Math.max(16, Math.min(26, dist * 0.038));
+          const angle = Math.atan2(dy, dx) - 0.22; // Lofted angle
+
+          const vx = Math.cos(angle) * speed;
+          const vy = Math.sin(angle) * speed;
+
+          const shuriken = new Shuriken(this.engine, startX, startY, vx, vy, false);
+          this.projectiles.push(shuriken);
+          this.sounds.playThrow();
+
+          this.resetEnemyTimer();
+        }
+      }
+
+      gameLoop(currentTime) {
+        const delta = Math.min(currentTime - this.lastTime, 40);
+        this.lastTime = currentTime;
+
+        // 1. Physics Step
+        Matter.Engine.update(this.engine, delta);
+
+        // 2. Camera Interpolation
+        if (this.gameState === 'AUTO_DASH') {
+          const dashSpeed = 0.085;
+          this.cameraX += (this.targetCameraX - this.cameraX) * dashSpeed;
+
+          // Move player sprite forward alongside dash
+          if (this.player && !this.player.isDead) {
+            Matter.Body.setPosition(this.player.torso, {
+              x: this.cameraX + 220,
+              y: this.player.homeY
+            });
+            Matter.Body.setVelocity(this.player.torso, { x: 12, y: 0 });
+          }
+
+          if (Math.abs(this.targetCameraX - this.cameraX) < 8) {
+            this.cameraX = this.targetCameraX;
+            this.onArriveAtNextRooftop();
+          }
+        }
+
+        // 3. Update Entities
+        const isDashing = this.gameState === 'AUTO_DASH';
+        if (this.player) {
+          this.player.update(currentTime, delta, isDashing);
+          if (this.player.torso.position.y > 660 && !this.player.isDead) {
+            // Fallen off rooftop ledge
+            this.player.health = 0;
+            this.player.triggerRagdollDefeat();
+            this.triggerGameOver();
+          }
+        }
+
+        for (let enemy of this.enemies) {
+          enemy.update(currentTime, delta, false);
+          // Check if enemy was knocked off the ledge
+          if (enemy.torso.position.y > 650 && !enemy.isDead) {
+            enemy.health = 0;
+            enemy.triggerRagdollDefeat();
+            this.addPopup(enemy.torso.position.x, 600, 'FALLEN!', '#f43f5e');
+            this.goldCoins += 15;
+            this.sounds.playCoin();
+            this.checkEncounterCleared();
+          }
+        }
+
+        // Update Projectiles
+        for (let i = this.projectiles.length - 1; i >= 0; i--) {
+          const p = this.projectiles[i];
+          p.update(currentTime, delta);
+          if (p.body.position.y > 800 || p.body.position.x < this.cameraX - 400 || p.body.position.x > this.cameraX + 1800) {
+            p.destroy();
+            this.projectiles.splice(i, 1);
+          }
+        }
+
+        // Update AI
+        this.updateAI(delta);
+
+        // Update Atmospheric Particles
+        this.particles.update();
+
+        // Update Floating Popups
+        for (let i = this.popups.length - 1; i >= 0; i--) {
+          const pop = this.popups[i];
+          pop.y += pop.vy;
+          pop.alpha -= 0.022;
+          if (pop.alpha <= 0) {
+            this.popups.splice(i, 1);
+          }
+        }
+
+        // 4. Render Frame
+        this.render();
+
+        requestAnimationFrame((t) => this.gameLoop(t));
+      }
+
+      render() {
+        const ctx = this.ctx;
+        ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // Apply 16:9 Letterbox / Scaling transform
+        ctx.save();
+        ctx.translate(this.offsetX, this.offsetY);
+        ctx.scale(this.scaleRatio, this.scaleRatio);
+
+        // Clip viewport area
+        ctx.beginPath();
+        ctx.rect(0, 0, this.virtualW, this.virtualH);
+        ctx.clip();
+
+        // 1. Parallax Japanese Sky & Moon
+        this.renderBackground(ctx);
+
+        // Camera Offset Matrix for World Space
+        ctx.save();
+        ctx.translate(-this.cameraX, 0);
+
+        // 2. Distant Midground Rooftop Silhouettes
+        this.renderMidgroundParallax(ctx);
+
+        // 3. Main Rooftops & Platforms
+        for (let plat of this.platforms) {
+          plat.render(ctx);
+        }
+
+        // 4. Enemy AI Telegraph Line
+        if (this.enemyTelegraphLine) {
+          ctx.save();
+          ctx.strokeStyle = `rgba(244, 63, 94, ${this.enemyTelegraphLine.alpha})`;
+          ctx.lineWidth = 2.5;
+          ctx.setLineDash([8, 8]);
+          ctx.beginPath();
+          ctx.moveTo(this.enemyTelegraphLine.startX, this.enemyTelegraphLine.startY);
+          ctx.lineTo(this.enemyTelegraphLine.targetX, this.enemyTelegraphLine.targetY);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // 5. Ragdoll Characters
+        if (this.player) this.player.render(ctx);
+        for (let enemy of this.enemies) enemy.render(ctx);
+
+        // 6. Shurikens
+        for (let p of this.projectiles) p.render(ctx);
+
+        // 7. Ballistic Aim Trajectory Arc
+        if (this.isAiming && this.player && !this.player.isDead) {
+          this.renderAimTrajectory(ctx);
+        }
+
+        // 8. Floating Combat Popups
+        for (let pop of this.popups) {
+          ctx.save();
+          ctx.font = pop.isCrit ? '900 24px "Cinzel", serif' : 'bold 20px "Cinzel", serif';
+          ctx.fillStyle = pop.color;
+          ctx.globalAlpha = Math.max(0, pop.alpha);
+          ctx.shadowColor = pop.color;
+          ctx.shadowBlur = 12;
+          ctx.textAlign = 'center';
+          ctx.fillText(pop.text, pop.x, pop.y);
+          ctx.restore();
+        }
+
+        ctx.restore(); // Restore Camera
+
+        // 9. Foreground Sakura Petals & Embers
+        this.particles.render(ctx);
+
+        // 10. Minimalist Shinobi HUD
+        this.renderHUD(ctx);
+
+        // 11. Screen Overlays (Start / Game Over)
+        if (this.gameState === 'START') {
+          this.renderStartScreen(ctx);
+        } else if (this.gameState === 'GAME_OVER') {
+          this.renderGameOverScreen(ctx);
+        }
+
+        ctx.restore(); // Restore Canvas transform
+      }
+
+      renderBackground(ctx) {
+        // Deep purple-tinted dusk gradient
+        const skyGrad = ctx.createLinearGradient(0, 0, 0, this.virtualH);
+        skyGrad.addColorStop(0, '#0a0314');
+        skyGrad.addColorStop(0.45, '#1b092b');
+        skyGrad.addColorStop(0.85, '#2e1245');
+        skyGrad.addColorStop(1, '#180826');
+        ctx.fillStyle = skyGrad;
+        ctx.fillRect(0, 0, this.virtualW, this.virtualH);
+
+        // Distant Glowing Full Moon
+        const moonX = this.virtualW * 0.76;
+        const moonY = 160;
+        const moonRadius = 64;
+
+        // Moon outer atmospheric halo
+        const haloGrad = ctx.createRadialGradient(moonX, moonY, moonRadius * 0.8, moonX, moonY, moonRadius * 2.8);
+        haloGrad.addColorStop(0, 'rgba(254, 240, 138, 0.35)');
+        haloGrad.addColorStop(0.5, 'rgba(216, 180, 254, 0.12)');
+        haloGrad.addColorStop(1, 'rgba(10, 3, 20, 0)');
+        ctx.fillStyle = haloGrad;
+        ctx.beginPath();
+        ctx.arc(moonX, moonY, moonRadius * 2.8, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Moon Disk
+        ctx.fillStyle = '#fef3c7';
+        ctx.shadowColor = '#fef08a';
+        ctx.shadowBlur = 24;
+        ctx.beginPath();
+        ctx.arc(moonX, moonY, moonRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Subtle moon craters
+        ctx.fillStyle = 'rgba(217, 119, 6, 0.12)';
+        ctx.beginPath();
+        ctx.arc(moonX - 16, moonY - 14, 14, 0, Math.PI * 2);
+        ctx.arc(moonX + 22, moonY + 12, 18, 0, Math.PI * 2);
+        ctx.arc(moonX - 8, moonY + 24, 11, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      renderMidgroundParallax(ctx) {
+        // Parallax Layer 1: Distant Misty Pagoda Silhouettes (Scroll factor: 0.2)
+        const pX1 = this.cameraX * 0.2;
+        ctx.fillStyle = '#100a1c';
+        for (let i = -1; i < 7; i++) {
+          const spireX = i * 360 - (pX1 % 360);
+          this.drawPagodaSpire(ctx, spireX, 320, 70, 240);
+        }
+
+        // Parallax Layer 2: Closer Rooftop Spires (Scroll factor: 0.5)
+        const pX2 = this.cameraX * 0.5;
+        ctx.fillStyle = '#150f24';
+        for (let i = -1; i < 8; i++) {
+          const spireX = i * 290 - (pX2 % 290);
+          this.drawPagodaSpire(ctx, spireX, 420, 90, 200);
+        }
+      }
+
+      drawPagodaSpire(ctx, x, y, w, h) {
+        ctx.beginPath();
+        // 3 tiers of roofs
+        for (let tier = 0; tier < 3; tier++) {
+          const tierY = y + tier * (h / 3.4);
+          const tierW = w * (1 - tier * 0.16);
+          ctx.moveTo(x - tierW * 0.6, tierY + 18);
+          ctx.quadraticCurveTo(x, tierY + 4, x + tierW * 0.6, tierY + 18);
+          ctx.lineTo(x + tierW * 0.35, tierY + 34);
+          ctx.lineTo(x - tierW * 0.35, tierY + 34);
+        }
+        ctx.fill();
+      }
+
+      renderAimTrajectory(ctx) {
+        const dx = this.pointerStart.x - this.pointerCurrent.x;
+        const dy = this.pointerStart.y - this.pointerCurrent.y;
+        const pullDist = Math.sqrt(dx * dx + dy * dy);
+        if (pullDist < 12) return;
+
+        const pullClamped = Math.min(pullDist, this.maxPullDistance);
+        const power = pullClamped * 0.22;
+        const angle = Math.atan2(dy, dx);
+
+        let vx = Math.cos(angle) * power;
+        let vy = Math.sin(angle) * power;
+
+        let px = this.player.torso.position.x + 18;
+        let py = this.player.torso.position.y - 12;
+        const dt = 1.0;
+        const g = this.engine.gravity.y * 0.55;
+
+        // Dotted Parabolic Arc
+        ctx.save();
+        for (let step = 0; step < 26; step++) {
+          px += vx * dt;
+          vy += g * dt;
+          py += vy * dt;
+
+          const dotRadius = Math.max(1.8, 4.5 - step * 0.14);
+          const alpha = Math.max(0.15, 1.0 - step * 0.038);
+
+          ctx.beginPath();
+          ctx.arc(px, py, dotRadius, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255, 42, 77, ${alpha})`;
+          ctx.shadowColor = '#ff2a4d';
+          ctx.shadowBlur = 8;
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+      renderHUD(ctx) {
+        ctx.save();
+
+        // 1. Top-Center: Large Distance Display
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = '900 36px "Cinzel", serif';
+        ctx.shadowColor = 'rgba(255, 42, 77, 0.6)';
+        ctx.shadowBlur = 12;
+        ctx.fillText(`${this.distanceMeters} m`, this.virtualW / 2, 48);
+
+        ctx.font = 'bold 14px "Cinzel", serif';
+        ctx.fillStyle = '#94a3b8';
+        ctx.shadowBlur = 0;
+        ctx.fillText(`BEST: ${this.bestDistance} m`, this.virtualW / 2, 72);
+
+        // 2. Top-Right: Gold Coins Counter
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = 'bold 22px "Cinzel", serif';
+        ctx.shadowColor = '#f59e0b';
+        ctx.shadowBlur = 10;
+        ctx.fillText(`🪙 ${this.goldCoins}`, this.virtualW - 32, 48);
+
+        // 3. Top-Left: Player Health Bar
+        if (this.player) {
+          const hpPct = Math.max(0, this.player.health / this.player.maxHealth);
+          const barW = 160;
+          const barH = 10;
+          const barX = 32;
+          const barY = 38;
+
+          ctx.textAlign = 'left';
+          ctx.fillStyle = '#f8fafc';
+          ctx.font = 'bold 13px "Cinzel", serif';
+          ctx.shadowBlur = 0;
+          ctx.fillText(`SHINOBI HP`, barX, barY - 6);
+
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+          ctx.fillRect(barX, barY, barW, barH);
+          ctx.fillStyle = hpPct > 0.3 ? '#10b981' : '#ef4444';
+          ctx.fillRect(barX, barY, barW * hpPct, barH);
+          ctx.strokeStyle = '#334155';
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(barX, barY, barW, barH);
+        }
+
+        ctx.restore();
+      }
+
+      renderStartScreen(ctx) {
+        ctx.save();
+        // Cinematic dark vignette
+        ctx.fillStyle = 'rgba(8, 6, 12, 0.78)';
+        ctx.fillRect(0, 0, this.virtualW, this.virtualH);
+
+        ctx.textAlign = 'center';
+
+        // Title
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = '900 48px "Cinzel", serif';
+        ctx.shadowColor = '#ff2a4d';
+        ctx.shadowBlur = 20;
+        ctx.fillText('SHADOW SHURIKEN', this.virtualW / 2, this.virtualH / 2 - 70);
+
+        ctx.fillStyle = '#ff2a4d';
+        ctx.font = 'bold 24px "Cinzel", serif';
+        ctx.shadowBlur = 10;
+        ctx.fillText('ROOFTOP SHINOBI', this.virtualW / 2, this.virtualH / 2 - 25);
+
+        // Instructions
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = '16px "Cinzel", serif';
+        ctx.shadowBlur = 0;
+        ctx.fillText('🏹 DRAG BACKWARD TO AIM & RELEASE SHURIKEN', this.virtualW / 2, this.virtualH / 2 + 35);
+        ctx.fillText('💀 HEADSHOTS DEAL INSTANT CRITICAL KO & DOUBLE COINS', this.virtualW / 2, this.virtualH / 2 + 65);
+
+        // Tap to Begin Prompt
+        const pulse = Math.abs(Math.sin(Date.now() * 0.005));
+        ctx.fillStyle = `rgba(251, 191, 36, ${0.7 + pulse * 0.3})`;
+        ctx.font = 'bold 22px "Cinzel", serif';
+        ctx.fillText('— TAP / CLICK TO COMMENCE DUEL —', this.virtualW / 2, this.virtualH / 2 + 130);
+
+        ctx.restore();
+      }
+
+      renderGameOverScreen(ctx) {
+        ctx.save();
+        // Overlay
+        ctx.fillStyle = 'rgba(8, 6, 12, 0.88)';
+        ctx.fillRect(0, 0, this.virtualW, this.virtualH);
+
+        ctx.textAlign = 'center';
+
+        // Defeat Title
+        ctx.fillStyle = '#ef4444';
+        ctx.font = '900 50px "Cinzel", serif';
+        ctx.shadowColor = '#dc2626';
+        ctx.shadowBlur = 24;
+        ctx.fillText('SHADOW FALLEN', this.virtualW / 2, this.virtualH / 2 - 110);
+
+        // Run Statistics Card
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = 'bold 22px "Cinzel", serif';
+        ctx.shadowBlur = 0;
+        ctx.fillText(`DISTANCE SURVIVED: ${this.distanceMeters} m`, this.virtualW / 2, this.virtualH / 2 - 40);
+
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = 'bold 18px "Cinzel", serif';
+        ctx.fillText(`BEST RECORD: ${this.bestDistance} m`, this.virtualW / 2, this.virtualH / 2 - 10);
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '17px "Cinzel", serif';
+        ctx.fillText(`Enemies Vanquished: ${this.kills}  |  Critical Headshots: ${this.headshots}  |  Coins: ${this.goldCoins}`, this.virtualW / 2, this.virtualH / 2 + 25);
+
+        // Play Again Button
+        const btnW = 220, btnH = 55;
+        const btnX = this.virtualW / 2 - btnW / 2;
+        const btnY = this.virtualH / 2 + 85;
+
+        ctx.fillStyle = '#ff2a4d';
+        ctx.shadowColor = '#ff2a4d';
+        ctx.shadowBlur = 18;
+        ctx.beginPath();
+        ctx.roundRect(btnX, btnY, btnW, btnH, 8);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 20px "Cinzel", serif';
+        ctx.fillText('PLAY AGAIN', this.virtualW / 2, btnY + 35);
+
+        ctx.restore();
+      }
+    }
+
+    // Launch Game on window load
+    window.addEventListener('load', () => {
+      window.gameInstance = new ShadowShurikenGame();
+    });
+
+  })();
+  </script>
+</body>
+</html>
