@@ -78,7 +78,6 @@
       playThrow() {
         if (!this.ctx || this.muted) return;
         const now = this.ctx.currentTime;
-        // White noise whoosh
         const bufferSize = this.ctx.sampleRate * 0.18;
         const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
         const data = buffer.getChannelData(0);
@@ -106,7 +105,6 @@
         if (!this.ctx || this.muted) return;
         const now = this.ctx.currentTime;
         if (isHeadshot) {
-          // Deep punch + cinematic ringing harmonic chime
           const osc1 = this.ctx.createOscillator();
           const osc2 = this.ctx.createOscillator();
           const gain = this.ctx.createGain();
@@ -130,7 +128,6 @@
           osc1.stop(now + 0.5);
           osc2.stop(now + 0.5);
         } else {
-          // Sharp impact slice
           const osc = this.ctx.createOscillator();
           const gain = this.ctx.createGain();
           osc.type = 'sawtooth';
@@ -201,111 +198,114 @@
     }
 
     // =========================================================================
-    // 2. VERLET CLOTH SCARF SYSTEM
+    // 1.5 SPRITE ASSET MANAGER & CHROMA-KEY PROCESSOR
     // =========================================================================
-    class CrimsonScarf {
-      constructor(pointCount = 8, segmentLength = 7) {
-        this.pointCount = pointCount;
-        this.segmentLength = segmentLength;
-        this.points = [];
-        for (let i = 0; i < pointCount; i++) {
-          this.points.push({
-            x: 0,
-            y: 0,
-            oldX: 0,
-            oldY: 0
-          });
-        }
-      }
-      init(x, y) {
-        for (let p of this.points) {
-          p.x = x;
-          p.y = y;
-          p.oldX = x;
-          p.oldY = y;
-        }
-      }
-      update(anchorX, anchorY, windX = -1.2, isDashing = false) {
-        // Pin head node
-        this.points[0].x = anchorX;
-        this.points[0].y = anchorY;
-
-        const friction = 0.94;
-        const gravityY = isDashing ? 0.05 : 0.18;
-        const effectiveWindX = isDashing ? -12.0 : windX + Math.sin(Date.now() * 0.008) * 1.4;
-
-        // Verlet integration
-        for (let i = 1; i < this.pointCount; i++) {
-          const p = this.points[i];
-          const vx = (p.x - p.oldX) * friction;
-          const vy = (p.y - p.oldY) * friction;
-          p.oldX = p.x;
-          p.oldY = p.y;
-          p.x += vx + effectiveWindX;
-          p.y += vy + gravityY;
-        }
-
-        // Distance constraint passes
-        const len = this.segmentLength;
-        for (let iter = 0; iter < 4; iter++) {
-          this.points[0].x = anchorX;
-          this.points[0].y = anchorY;
-          for (let i = 0; i < this.pointCount - 1; i++) {
-            const p1 = this.points[i];
-            const p2 = this.points[i + 1];
-            const dx = p2.x - p1.x;
-            const dy = p2.y - p1.y;
-            const dist = Math.sqrt(dx * dx + dy * dy) || 0.001;
-            const diff = (dist - len) / dist;
-            if (i === 0) {
-              p2.x -= dx * diff;
-              p2.y -= dy * diff;
-            } else {
-              p1.x += dx * diff * 0.5;
-              p1.y += dy * diff * 0.5;
-              p2.x -= dx * diff * 0.5;
-              p2.y -= dy * diff * 0.5;
+    const SpriteAssets = {
+      loaded: false,
+      playerSheet: null,
+      samuraiSheet: null,
+      // Exact frame bounding boxes [sx, sy, sw, sh, anchorX, anchorY]
+      // Clamped cleanly above bottom text labels to ensure 100% clean silhouettes
+      playerFrames: [
+        // 0: IDLE stance (standing/crouched guard)
+        { sx: 110, sy: 160, sw: 540, sh: 690, anchorX: 280, anchorY: 678 },
+        // 1: AIMING / WINDUP (pulling arm back while dragging)
+        { sx: 670, sy: 130, sw: 480, sh: 720, anchorX: 250, anchorY: 710 },
+        // 2: THROW (whipping arm forward on release)
+        { sx: 1160, sy: 160, sw: 620, sh: 690, anchorX: 280, anchorY: 678 },
+        // 3: HURT (taking hit impact)
+        { sx: 1780, sy: 160, sw: 400, sh: 690, anchorX: 200, anchorY: 685 },
+        // 4: SPRINT / LEAP (running and jumping to next roof)
+        { sx: 2160, sy: 160, sw: 580, sh: 690, anchorX: 290, anchorY: 650 }
+      ],
+      samuraiFrames: [
+        // 0: IDLE guard (heavy stance)
+        { sx: 10, sy: 160, sw: 720, sh: 775, anchorX: 420, anchorY: 775 },
+        // 1: WINDUP CHARGE (charging throw)
+        { sx: 710, sy: 160, sw: 720, sh: 775, anchorX: 380, anchorY: 775 },
+        // 2: THROW (launching weapon leftward)
+        { sx: 1420, sy: 160, sw: 720, sh: 775, anchorX: 370, anchorY: 775 },
+        // 3: HURT / HIT (armor sparks & stagger / defeat collapse)
+        { sx: 2140, sy: 160, sw: 600, sh: 775, anchorX: 310, anchorY: 775 }
+      ],
+      loadAndProcess(srcCandidates, isPlayer) {
+        return new Promise((resolve) => {
+          let index = 0;
+          const tryNext = () => {
+            if (index >= srcCandidates.length) {
+              resolve(null);
+              return;
             }
-          }
-        }
+            const src = srcCandidates[index++];
+            const img = new Image();
+            img.onload = () => {
+              try {
+                const cv = document.createElement('canvas');
+                cv.width = img.width;
+                cv.height = img.height;
+                const ctx = cv.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+
+                const imgData = ctx.getImageData(0, 0, img.width, img.height);
+                const d = imgData.data;
+
+                // Erase bottom text caption area cleanly
+                const textCutY = isPlayer ? 860 : 960;
+                for (let y = textCutY; y < img.height; y++) {
+                  for (let x = 0; x < img.width; x++) {
+                    d[(y * img.width + x) * 4 + 3] = 0;
+                  }
+                }
+
+                // Chroma-key white & off-white background with edge smoothing
+                for (let i = 0; i < d.length; i += 4) {
+                  if (d[i + 3] === 0) continue;
+                  const r = d[i], g = d[i + 1], b = d[i + 2];
+                  if (r >= 228 && g >= 228 && b >= 228) {
+                    d[i + 3] = 0; // Pure transparent
+                  } else if (r > 195 && g > 195 && b > 195) {
+                    const avg = (r + g + b) / 3;
+                    d[i + 3] = Math.max(0, 255 - (avg - 195) * 7); // Soft edge antialiasing
+                  }
+                }
+                ctx.putImageData(imgData, 0, 0);
+                resolve(cv);
+              } catch (securityErr) {
+                // In case of local file:// security restriction, fallback to raw image
+                resolve(img);
+              }
+            };
+            img.onerror = () => tryNext();
+            img.src = src;
+          };
+          tryNext();
+        });
+      },
+      init() {
+        const playerPaths = [
+          'assets/character sprite sheet.png',
+          '../assets/character sprite sheet.png',
+          '/assets/character sprite sheet.png'
+        ];
+        const samuraiPaths = [
+          'assets/Samurai sprite sheet.png',
+          '../assets/Samurai sprite sheet.png',
+          '/assets/Samurai sprite sheet.png'
+        ];
+        Promise.all([
+          this.loadAndProcess(playerPaths, true),
+          this.loadAndProcess(samuraiPaths, false)
+        ]).then(([pCv, sCv]) => {
+          if (pCv) this.playerSheet = pCv;
+          if (sCv) this.samuraiSheet = sCv;
+          if (pCv && sCv) this.loaded = true;
+        });
       }
-      render(ctx) {
-        if (this.points.length < 2) return;
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(this.points[0].x, this.points[0].y);
-        for (let i = 1; i < this.points.length - 1; i++) {
-          const xc = (this.points[i].x + this.points[i + 1].x) * 0.5;
-          const yc = (this.points[i].y + this.points[i + 1].y) * 0.5;
-          ctx.quadraticCurveTo(this.points[i].x, this.points[i].y, xc, yc);
-        }
-        const last = this.points[this.points.length - 1];
-        ctx.lineTo(last.x, last.y);
-
-        // Glowing crimson ribbon styling
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-
-        // Outer glow
-        ctx.strokeStyle = 'rgba(255, 42, 77, 0.4)';
-        ctx.lineWidth = 7;
-        ctx.stroke();
-
-        // Inner core
-        ctx.strokeStyle = '#ff2a4d';
-        ctx.lineWidth = 4;
-        ctx.stroke();
-
-        // Highlight spine
-        ctx.strokeStyle = '#ff99aa';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        ctx.restore();
-      }
-    }
+    };
+    SpriteAssets.init();
 
     // =========================================================================
-    // 3. MATTER.JS RAGDOLL SHINOBI CREATURE
+    // 2. MATTER.JS RAGDOLL SHINOBI CREATURE
     // =========================================================================
     class ShinobiRagdoll {
       constructor(engine, x, y, isPlayer = false, options = {}) {
@@ -314,28 +314,40 @@
         this.isPlayer = isPlayer;
         this.homeX = x;
         this.homeY = y;
-        this.health = options.health || (isPlayer ? 100 : 80);
-        this.maxHealth = this.health;
+        this.maxHealth = options.maxHealth || options.maxHp || (isPlayer ? 100 : 80);
+        this.health = options.health !== undefined ? options.health : (options.hp !== undefined ? options.hp : this.maxHealth);
+        this.hp = this.health;
+        this.maxHp = this.maxHealth;
         this.isArmored = options.isArmored || false;
         this.isDead = false;
         this.isRagdoll = false;
         this.staggerTimer = 0;
-        this.scarf = isPlayer ? new CrimsonScarf(8, 8) : null;
-        if (this.scarf) this.scarf.init(x, y - 24);
+        this.throwAnimTimer = 0;
+        this.throwDuration = 240;
+        this.throwAngle = 0;
+        this.isAiming = false;
+        this.aimPullProgress = 0;
+        this.isWalking = false;
+        this.isJumping = false;
+        this.landingTimer = 0;
 
         // Physics Bodies
         const group = Matter.Body.nextGroup(true);
         this.collisionGroup = group;
 
-        // Head
-        this.head = Matter.Bodies.circle(x, y - 30, 13, {
+        // Head (Dedicated rigid body circle sized to match head/helmet hitbox)
+        const headRadius = isPlayer ? 16 : 22;
+        const headOffsetY = isPlayer ? 32 : 40;
+        this.headRadius = headRadius;
+        this.head = Matter.Bodies.circle(x, y - headOffsetY, headRadius, {
           collisionFilter: { group: group, category: 0x0002 },
-          density: 0.002,
+          density: 0.003,
           friction: 0.8,
-          restitution: 0.1,
+          restitution: 0.05,
           label: isPlayer ? 'player_head' : 'enemy_head'
         });
         this.head.ragdollOwner = this;
+        this.head.isHead = true;
 
         // Torso
         this.torso = Matter.Bodies.rectangle(x, y - 5, 22, 36, {
@@ -380,17 +392,14 @@
         this.rightLeg.ragdollOwner = this;
 
         // Constraints
-        this.constraints = [];
-        // Neck
         this.neck = Matter.Constraint.create({
           bodyA: this.torso,
           pointA: { x: 0, y: -18 },
           bodyB: this.head,
-          pointB: { x: 0, y: 12 },
-          stiffness: 0.92,
+          pointB: { x: 0, y: headRadius - 4 },
+          stiffness: 0.95,
           damping: 0.1
         });
-        // Shoulders
         this.leftShoulder = Matter.Constraint.create({
           bodyA: this.torso,
           pointA: { x: -10, y: -12 },
@@ -407,7 +416,6 @@
           stiffness: 0.85,
           damping: 0.1
         });
-        // Hips
         this.leftHip = Matter.Constraint.create({
           bodyA: this.torso,
           pointA: { x: -6, y: 16 },
@@ -436,23 +444,76 @@
         Matter.Composite.add(this.world, this.composite);
       }
 
-      update(time, delta, isDashing = false) {
-        if (this.isDead && this.torso.position.y > 1400) {
-          // Fallen off world
+      get hp() {
+        return this.health;
+      }
+      set hp(v) {
+        this.health = v;
+      }
+      get maxHp() {
+        return this.maxHealth;
+      }
+      set maxHp(v) {
+        this.maxHealth = v;
+      }
+
+      setPosition(x, y) {
+        const dx = x - this.torso.position.x;
+        const dy = y - this.torso.position.y;
+        this.homeX = x;
+        this.homeY = y;
+
+        const bodies = [this.torso, this.head, this.leftArm, this.rightArm, this.leftLeg, this.rightLeg];
+        for (let b of bodies) {
+          Matter.Body.setPosition(b, {
+            x: b.position.x + dx,
+            y: b.position.y + dy
+          });
+          Matter.Body.setVelocity(b, { x: 0, y: 0 });
+          Matter.Body.setAngularVelocity(b, 0);
+        }
+      }
+
+      triggerThrow(angle) {
+        this.throwAnimTimer = this.throwDuration;
+        this.throwAngle = angle;
+        this.isAiming = false;
+      }
+
+      update(time, delta) {
+        if (this.isDead) {
+          if (this.collapseTimer === undefined) this.collapseTimer = 0;
+          if (this.collapseTimer < 400) {
+            this.collapseTimer += delta;
+          }
+          // Prevent any 360 spinning! Lock angular velocity to 0 and let body settle flat on platform
+          Matter.Body.setAngularVelocity(this.torso, 0);
+          Matter.Body.setAngularVelocity(this.head, 0);
+          Matter.Body.setVelocity(this.torso, { x: 0, y: 0 });
+          Matter.Body.setVelocity(this.head, { x: 0, y: 0 });
           return;
         }
 
         // Active Upright Stance Controller
         if (!this.isRagdoll && !this.isDead) {
           if (this.staggerTimer > 0) {
-            // Briefly allow stagger flinch from hit impulse
             this.staggerTimer -= delta;
           } else {
-            // Critical Wounded Posture when HP < 25%
             const isCritical = (this.health / this.maxHealth) < 0.25;
-            const targetTorsoAngle = isCritical ? (this.isPlayer ? 0.28 : -0.28) : 0;
-            const targetHeadAngle = isCritical ? (this.isPlayer ? 0.35 : -0.35) : 0;
+            let targetTorsoAngle = isCritical ? (this.isPlayer ? 0.28 : -0.28) : 0;
+            let targetHeadAngle = isCritical ? (this.isPlayer ? 0.35 : -0.35) : 0;
             const breathOffset = isCritical ? Math.sin(Date.now() * 0.008) * 3 : 0;
+
+            if (this.isWalking) {
+              targetTorsoAngle = this.isPlayer ? 0.18 : -0.18;
+              targetHeadAngle = this.isPlayer ? 0.12 : -0.12;
+            } else if (this.isJumping) {
+              targetTorsoAngle = this.isPlayer ? 0.24 : -0.24;
+              targetHeadAngle = this.isPlayer ? 0.18 : -0.18;
+            } else if (this.landingTimer > 0) {
+              this.landingTimer -= delta;
+              targetTorsoAngle = this.isPlayer ? 0.14 : -0.14;
+            }
 
             // Restorative Upright Angular Torque
             const angleDiff = targetTorsoAngle - this.torso.angle;
@@ -463,58 +524,94 @@
             Matter.Body.setAngle(this.head, this.head.angle + headDiff * 0.25);
             Matter.Body.setAngularVelocity(this.head, 0);
 
-            // Firm Grounding & Platform Support (prevents sinking/slipping under gravity)
-            const targetY = (this.homeY - 6) + breathOffset;
-            const dy = targetY - this.torso.position.y;
-            const dx = this.homeX - this.torso.position.x;
-            Matter.Body.setVelocity(this.torso, {
-              x: this.torso.velocity.x * 0.75 + dx * 0.12,
-              y: this.torso.velocity.y * 0.75 + dy * 0.12
-            });
+            // Grounding & Platform Support (when not jumping)
+            if (!this.isJumping) {
+              const targetY = (this.homeY - 6) + breathOffset + (this.landingTimer > 0 ? 6 : 0);
+              const dy = targetY - this.torso.position.y;
+              const dx = this.homeX - this.torso.position.x;
+              Matter.Body.setVelocity(this.torso, {
+                x: this.torso.velocity.x * 0.75 + (this.isWalking ? 0 : dx * 0.12),
+                y: this.torso.velocity.y * 0.75 + dy * 0.12
+              });
+            }
 
-            // Keep Legs Vertical like Sturdy Pillars
-            Matter.Body.setAngle(this.leftLeg, 0);
-            Matter.Body.setAngle(this.rightLeg, 0);
+            // Legs Animation
+            if (this.isWalking) {
+              const stride = Math.sin(time * 0.016) * 0.42;
+              Matter.Body.setAngle(this.leftLeg, stride);
+              Matter.Body.setAngle(this.rightLeg, -stride);
+            } else if (this.isJumping) {
+              Matter.Body.setAngle(this.leftLeg, -0.55);
+              Matter.Body.setAngle(this.rightLeg, 0.45);
+            } else {
+              Matter.Body.setAngle(this.leftLeg, 0);
+              Matter.Body.setAngle(this.rightLeg, 0);
+            }
             Matter.Body.setAngularVelocity(this.leftLeg, 0);
             Matter.Body.setAngularVelocity(this.rightLeg, 0);
             Matter.Body.setVelocity(this.leftLeg, { x: 0, y: this.torso.velocity.y });
             Matter.Body.setVelocity(this.rightLeg, { x: 0, y: this.torso.velocity.y });
-          }
-        }
 
-        // Scarf update
-        if (this.scarf) {
-          const neckPos = {
-            x: this.torso.position.x - (this.isPlayer ? 8 : -8),
-            y: this.torso.position.y - 18
-          };
-          this.scarf.update(neckPos.x, neckPos.y, this.isPlayer ? -2.2 : 2.2, isDashing);
+            // Arm Pose Control
+            const backArm = this.isPlayer ? this.leftArm : this.rightArm;
+            const throwArm = this.isPlayer ? this.rightArm : this.leftArm;
+
+            // 1. Back Arm: natural resting posture
+            const backArmRestAngle = this.isPlayer ? 0.12 : -0.12;
+            Matter.Body.setAngle(backArm, this.torso.angle + backArmRestAngle);
+            Matter.Body.setAngularVelocity(backArm, 0);
+            Matter.Body.setVelocity(backArm, this.torso.velocity);
+
+            // 2. Throwing Arm: 2-step throw animation
+            if (this.throwAnimTimer > 0) {
+              this.throwAnimTimer -= delta;
+              const t = Math.max(0, this.throwAnimTimer / this.throwDuration);
+              if (t > 0.45) {
+                Matter.Body.setAngle(throwArm, this.throwAngle);
+              } else {
+                const easeT = t / 0.45;
+                const idleArmAngle = this.isPlayer ? -0.15 : 0.15;
+                Matter.Body.setAngle(throwArm, idleArmAngle + (this.throwAngle - idleArmAngle) * easeT);
+              }
+            } else if (this.isAiming) {
+              const pullPct = Math.min(1.0, this.aimPullProgress || 0);
+              const cockAngle = this.isPlayer
+                ? (-0.15 - pullPct * 1.45)
+                : (0.15 + pullPct * 1.45);
+              Matter.Body.setAngle(throwArm, cockAngle);
+            } else {
+              const idleArmAngle = this.isPlayer ? -0.15 : 0.15;
+              Matter.Body.setAngle(throwArm, this.torso.angle + idleArmAngle);
+            }
+            Matter.Body.setAngularVelocity(throwArm, 0);
+            Matter.Body.setVelocity(throwArm, this.torso.velocity);
+          }
         }
       }
 
       applyHit(damage, hitBody, impulseForce = { x: 0, y: 0 }, isHeadshot = false) {
         if (this.isDead) return { defeated: false, isHeadshot: false };
+        if (isNaN(damage)) damage = 0;
 
         if (this.isArmored && !isHeadshot && this.health > 40) {
-          // Armor deflects portion of damage
           damage = Math.floor(damage * 0.5);
         }
 
-        this.health -= damage;
-        this.staggerTimer = isHeadshot ? 0 : 340; // Stagger flinch
+        this.health = Math.max(0, this.health - damage);
+        this.hp = this.health;
+        this.staggerTimer = isHeadshot ? 0 : 340;
 
-        // Physical impulse
         if (hitBody && hitBody.position) {
           Matter.Body.applyForce(hitBody, hitBody.position, impulseForce);
         }
 
         if (isHeadshot || this.health <= 0) {
           this.health = 0;
+          this.hp = 0;
           this.triggerRagdollDefeat(impulseForce);
           return { defeated: true, isHeadshot: isHeadshot };
         }
 
-        // Non-lethal hit wobble
         Matter.Body.applyForce(this.torso, this.torso.position, {
           x: impulseForce.x * 0.65,
           y: impulseForce.y * 0.65 - 0.015
@@ -526,20 +623,20 @@
         this.isDead = true;
         this.isRagdoll = true;
         this.staggerTimer = 0;
+        this.isAiming = false;
+        this.throwAnimTimer = 0;
+        this.collapseTimer = 0;
 
-        // Loosen joints for floppy ragdoll tumble
+        // No 360 spin! Immediately stop all angular velocity
+        Matter.Body.setAngularVelocity(this.torso, 0);
+        Matter.Body.setAngularVelocity(this.head, 0);
+        Matter.Body.setVelocity(this.torso, { x: 0, y: 0 });
+        Matter.Body.setVelocity(this.head, { x: 0, y: 0 });
+
         for (let c of this.constraints) {
-          c.stiffness = 0.22;
-          c.damping = 0.02;
+          c.stiffness = 0.15;
+          c.damping = 0.3;
         }
-
-        // Apply violent tumbling impulse
-        const flingX = impulse.x * 2.2 || (this.isPlayer ? -0.04 : 0.04);
-        const flingY = -0.035 + (impulse.y * 1.5 || 0);
-
-        Matter.Body.applyForce(this.torso, this.torso.position, { x: flingX, y: flingY });
-        Matter.Body.setAngularVelocity(this.torso, (Math.random() > 0.5 ? 1 : -1) * 0.28);
-        Matter.Body.setAngularVelocity(this.head, (Math.random() > 0.5 ? 1 : -1) * 0.38);
       }
 
       render(ctx) {
@@ -548,101 +645,106 @@
         const silhouetteColor = '#111115';
         const outlineColor = this.isPlayer ? '#2a2a38' : '#331a22';
 
-        // Render Scarf first (behind ninja)
-        if (this.scarf) {
-          this.scarf.render(ctx);
-        }
+        const sheet = this.isPlayer ? SpriteAssets.playerSheet : SpriteAssets.samuraiSheet;
+        const frames = this.isPlayer ? SpriteAssets.playerFrames : SpriteAssets.samuraiFrames;
 
-        // Helper: render rotated rounded box
-        const drawBodyBox = (body, w, h, radius = 4, color = silhouetteColor) => {
-          ctx.save();
-          ctx.translate(body.position.x, body.position.y);
-          ctx.rotate(body.angle);
-          ctx.beginPath();
-          ctx.roundRect(-w / 2, -h / 2, w, h, radius);
-          ctx.fillStyle = color;
-          ctx.fill();
-          ctx.strokeStyle = outlineColor;
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
+        if (sheet && frames) {
+          // Determine active animation frame index from character state machine
+          let frameIndex = 0;
+          if (this.isPlayer) {
+            if (this.isDead || this.staggerTimer > 0) {
+              frameIndex = 3; // Frame 3: HURT / HIT IMPACT
+            } else if (this.isJumping || this.isWalking) {
+              frameIndex = 4; // Frame 4: SPRINT / LEAP
+            } else if (this.throwAnimTimer > 0) {
+              frameIndex = 2; // Frame 2: THROW
+            } else if (this.isAiming) {
+              frameIndex = 1; // Frame 1: AIMING / WINDUP
+            } else {
+              frameIndex = 0; // Frame 0: IDLE stance
+            }
+          } else {
+            // Enemy Samurai
+            if (this.isDead || this.staggerTimer > 0) {
+              frameIndex = 3; // Frame 3: HURT / HIT & ARMOR SPARKS
+            } else if (this.throwAnimTimer > 0) {
+              frameIndex = 2; // Frame 2: THROW
+            } else if (this.isAiming) {
+              frameIndex = 1; // Frame 1: WINDUP CHARGE
+            } else {
+              frameIndex = 0; // Frame 0: IDLE GUARD
+            }
+          }
 
-          // Subtle rim light
-          ctx.strokeStyle = this.isPlayer ? 'rgba(255, 42, 77, 0.4)' : 'rgba(168, 85, 247, 0.4)';
-          ctx.lineWidth = 1;
-          ctx.stroke();
-          ctx.restore();
-        };
+          const frame = frames[frameIndex] || frames[0];
+          const targetH = this.isPlayer ? 122 : 126;
+          const scale = targetH / frame.sh;
+          const drawW = frame.sw * scale;
+          const drawH = frame.sh * scale;
 
-        // Limbs
-        drawBodyBox(this.leftLeg, 10, 26, 4);
-        drawBodyBox(this.rightLeg, 10, 26, 4);
-        drawBodyBox(this.leftArm, 8, 22, 3);
-        drawBodyBox(this.rightArm, 8, 22, 3);
+          if (this.isDead) {
+            // Knockout Defeat Pose: Frame 3 (HURT/FALLEN) collapses backward and lies flat on the rooftop floor (no 360 spin!)
+            const t = Math.min(1.0, (this.collapseTimer || 0) / 380);
+            const ease = 1 - Math.cos((t * Math.PI) / 2);
+            const targetFallAngle = this.isPlayer ? -1.48 : 1.48;
+            const currentAngle = targetFallAngle * ease;
 
-        // Torso
-        drawBodyBox(this.torso, 22, 36, 6);
+            const posX = this.torso.position.x;
+            const footY = this.torso.position.y + 34;
 
-        // Armor plate if equipped
-        if (this.isArmored && !this.isDead) {
+            ctx.save();
+            ctx.translate(posX, footY - 8);
+            if (!this.isPlayer) {
+              ctx.scale(-1, 1); // Enemy mirrored horizontally to face LEFT toward player!
+            }
+            ctx.rotate(currentAngle * (this.isPlayer ? 1 : -1));
+            ctx.drawImage(sheet, frame.sx, frame.sy, frame.sw, frame.sh, -frame.anchorX * scale, -frame.anchorY * scale, drawW, drawH);
+            ctx.restore();
+          } else {
+            // Active stance: anchored firmly to platform surface and torso
+            const posX = this.torso.position.x;
+            const footY = this.torso.position.y + 34;
+
+            // Ground contact shadow when alive and on platform
+            if (!this.isJumping) {
+              ctx.save();
+              ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+              ctx.beginPath();
+              ctx.ellipse(posX, footY + 1, 26, 5.5, 0, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.restore();
+            }
+
+            ctx.save();
+            ctx.translate(posX, footY);
+            if (!this.isPlayer) {
+              ctx.scale(-1, 1); // Enemy mirrored horizontally to face LEFT toward player at all times!
+            }
+            ctx.rotate(this.torso.angle * 0.4 * (this.isPlayer ? 1 : -1));
+            ctx.drawImage(sheet, frame.sx, frame.sy, frame.sw, frame.sh, -frame.anchorX * scale, -frame.anchorY * scale, drawW, drawH);
+            ctx.restore();
+          }
+        } else {
+          // Minimal fallback silhouette while sprites are loading
           ctx.save();
           ctx.translate(this.torso.position.x, this.torso.position.y);
           ctx.rotate(this.torso.angle);
-          ctx.fillStyle = '#475569';
-          ctx.fillRect(-12, -14, 24, 18);
-          ctx.strokeStyle = '#94a3b8';
-          ctx.lineWidth = 1.5;
-          ctx.strokeRect(-12, -14, 24, 18);
-          ctx.fillStyle = '#f59e0b';
-          ctx.fillRect(-4, -6, 8, 4);
+          ctx.fillStyle = silhouetteColor;
+          ctx.beginPath();
+          ctx.roundRect(-12, -25, 24, 50, 6);
+          ctx.fill();
           ctx.restore();
         }
 
-        // Head
-        ctx.save();
-        ctx.translate(this.head.position.x, this.head.position.y);
-        ctx.rotate(this.head.angle);
-        ctx.beginPath();
-        ctx.arc(0, 0, 13, 0, Math.PI * 2);
-        ctx.fillStyle = silhouetteColor;
-        ctx.fill();
-        ctx.strokeStyle = outlineColor;
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-
-        // Glowing Shinobi Eyes / Mask Slot
-        if (!this.isDead) {
-          const eyeOffset = this.isPlayer ? 4 : -4;
-          ctx.fillStyle = this.isPlayer ? '#ff2a4d' : '#e11d48';
-          ctx.shadowColor = this.isPlayer ? '#ff2a4d' : '#f43f5e';
-          ctx.shadowBlur = 8;
-          ctx.beginPath();
-          ctx.ellipse(eyeOffset, -2, 3.5, 1.8, this.isPlayer ? -0.1 : 0.1, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.shadowBlur = 0;
-
-          // Headband ribbon knots
-          ctx.fillStyle = this.isPlayer ? '#ff2a4d' : '#881337';
-          ctx.fillRect(eyeOffset > 0 ? -12 : 6, -5, 6, 3);
-        } else {
-          // Defeated 'X' eyes
-          ctx.strokeStyle = '#ef4444';
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(-4, -4); ctx.lineTo(0, 0);
-          ctx.moveTo(0, -4); ctx.lineTo(-4, 0);
-          ctx.moveTo(2, -4); ctx.lineTo(6, 0);
-          ctx.moveTo(6, -4); ctx.lineTo(2, 0);
-          ctx.stroke();
-        }
-        ctx.restore();
-
-        // Health Bar above alive characters
-        if (!this.isDead && this.health < this.maxHealth) {
+        // Floating Health Bar above alive characters (anchored strictly to torso body position)
+        if (!this.isDead && (this.health < this.maxHealth || !this.isPlayer)) {
           const hpBarW = 34;
           const hpBarH = 4;
           const barX = this.torso.position.x - hpBarW / 2;
-          const barY = this.head.position.y - 24;
-          const pct = Math.max(0, this.health / this.maxHealth);
+          const barY = this.torso.position.y - 48;
+          const curr = (this.health !== undefined ? this.health : this.hp) || 0;
+          const maxH = (this.maxHealth || this.maxHp || 100);
+          const pct = Math.max(0, Math.min(1, curr / maxH));
 
           ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
           ctx.fillRect(barX - 1, barY - 1, hpBarW + 2, hpBarH + 2);
@@ -654,12 +756,19 @@
       }
 
       destroy() {
+        const bodies = [this.head, this.torso, this.leftArm, this.rightArm, this.leftLeg, this.rightLeg];
+        for (let c of this.constraints) {
+          Matter.Composite.remove(this.world, c);
+        }
+        for (let b of bodies) {
+          Matter.Composite.remove(this.world, b);
+        }
         Matter.Composite.remove(this.world, this.composite);
       }
     }
 
     // =========================================================================
-    // 4. SHURIKEN PROJECTILE
+    // 3. SHURIKEN PROJECTILE
     // =========================================================================
     class Shuriken {
       constructor(engine, x, y, vx, vy, isPlayer = true, game = null) {
@@ -675,7 +784,6 @@
         this.lifeTime = 0;
         this.radius = 11;
 
-        // Ground Despawn (2.5s timer + fade + smoke puff)
         this.isGroundStuck = false;
         this.groundStuckTimer = 2500;
         this.isMarkedForRemoval = false;
@@ -697,7 +805,6 @@
       update(time, delta) {
         this.lifeTime += delta;
 
-        // Ground stuck countdown
         if (this.isGroundStuck) {
           this.groundStuckTimer -= delta;
           if (this.groundStuckTimer <= 0 && !this.isMarkedForRemoval) {
@@ -710,7 +817,6 @@
         }
 
         if (this.isStuck && this.stuckTarget && this.stuckTarget.position) {
-          // Attached to hit ragdoll part
           const cos = Math.cos(this.stuckTarget.angle);
           const sin = Math.sin(this.stuckTarget.angle);
           const px = this.stuckTarget.position.x + (this.stuckOffset.x * cos - this.stuckOffset.y * sin);
@@ -720,7 +826,32 @@
           return;
         }
 
-        // Record trailing glowing positions
+        // Continuous sweep collision check for guaranteed headshot detection
+        if (this.isPlayer && !this.isStuck && !this.isGroundStuck && this.game && this.game.enemy && !this.game.enemy.isDead) {
+          const enemy = this.game.enemy;
+          const headPos = enemy.head.position;
+          const curPos = this.body.position;
+          const prevPos = this.prevPos || curPos;
+
+          const l2 = (curPos.x - prevPos.x) * (curPos.x - prevPos.x) + (curPos.y - prevPos.y) * (curPos.y - prevPos.y);
+          let distToHead;
+          if (l2 === 0) {
+            distToHead = Math.hypot(headPos.x - curPos.x, headPos.y - curPos.y);
+          } else {
+            let segT = ((headPos.x - prevPos.x) * (curPos.x - prevPos.x) + (headPos.y - prevPos.y) * (curPos.y - prevPos.y)) / l2;
+            segT = Math.max(0, Math.min(1, segT));
+            const nearestX = prevPos.x + segT * (curPos.x - prevPos.x);
+            const nearestY = prevPos.y + segT * (curPos.y - prevPos.y);
+            distToHead = Math.hypot(headPos.x - nearestX, headPos.y - nearestY);
+          }
+
+          if (distToHead <= ((enemy.headRadius || 22) + this.radius + 2)) {
+            this.game.onShurikenHit(this, enemy.head, true);
+            return;
+          }
+        }
+        this.prevPos = { x: this.body.position.x, y: this.body.position.y };
+
         this.trail.push({
           x: this.body.position.x,
           y: this.body.position.y,
@@ -747,7 +878,6 @@
       }
 
       render(ctx) {
-        // Fade out on ground despawn
         let fadeAlpha = 1.0;
         if (this.isGroundStuck && this.groundStuckTimer < 600) {
           fadeAlpha = Math.max(0, this.groundStuckTimer / 600);
@@ -788,7 +918,6 @@
         ctx.beginPath();
         for (let i = 0; i < 4; i++) {
           const angle = (i * Math.PI) / 2;
-          const nextAngle = ((i + 1) * Math.PI) / 2;
           const midAngle = angle + Math.PI / 4;
 
           const tipX = Math.cos(angle) * r;
@@ -803,16 +932,13 @@
         }
         ctx.closePath();
 
-        // Dark obsidian iron body
         ctx.fillStyle = '#1e1b29';
         ctx.fill();
 
-        // Razor bevels
         ctx.strokeStyle = this.isPlayer ? '#ff2a4d' : '#c084fc';
         ctx.lineWidth = 1.6;
         ctx.stroke();
 
-        // Center hub brass ring
         ctx.beginPath();
         ctx.arc(0, 0, 3, 0, Math.PI * 2);
         ctx.fillStyle = '#fbbf24';
@@ -828,7 +954,7 @@
     }
 
     // =========================================================================
-    // 5. PROCEDURAL JAPANESE ROOFTOP PLATFORM
+    // 4. PROCEDURAL JAPANESE ROOFTOP PLATFORM
     // =========================================================================
     class RooftopPlatform {
       constructor(engine, x, y, width, height) {
@@ -839,7 +965,6 @@
         this.width = width;
         this.height = height;
 
-        // Static Matter.js body
         this.body = Matter.Bodies.rectangle(x + width / 2, y + height / 2, width, height, {
           isStatic: true,
           friction: 0.9,
@@ -847,7 +972,6 @@
         });
         Matter.Composite.add(this.world, this.body);
 
-        // Hanging Paper Lanterns
         this.lanterns = [];
         if (width > 180) {
           this.lanterns.push({
@@ -870,19 +994,15 @@
         const w = this.width;
         const h = this.height;
 
-        // 1. Classical Japanese Pagoda Curved Roof Eaves
         ctx.fillStyle = '#0e0e14';
         ctx.strokeStyle = '#222230';
         ctx.lineWidth = 2;
 
         ctx.beginPath();
-        // Top tiled ridge with curved ends (splay)
         ctx.moveTo(x - 20, y - 6);
         ctx.quadraticCurveTo(x + w * 0.25, y - 2, x + w * 0.5, y - 4);
         ctx.quadraticCurveTo(x + w * 0.75, y - 2, x + w + 20, y - 6);
-        // Eave tip drop
         ctx.lineTo(x + w + 16, y + 14);
-        // Under eave curve
         ctx.lineTo(x + w - 10, y + 18);
         ctx.lineTo(x + 10, y + 18);
         ctx.lineTo(x - 16, y + 14);
@@ -890,7 +1010,6 @@
         ctx.fill();
         ctx.stroke();
 
-        // Glowing red lacquer under-trim
         ctx.strokeStyle = '#991b1b';
         ctx.lineWidth = 2.5;
         ctx.beginPath();
@@ -898,17 +1017,14 @@
         ctx.lineTo(x + w + 12, y + 15);
         ctx.stroke();
 
-        // 2. Main Wall Tower Silhouette
         ctx.fillStyle = '#09080e';
         ctx.fillRect(x + 10, y + 18, w - 20, h - 18);
 
-        // Wooden lattice window slits
         ctx.fillStyle = 'rgba(251, 191, 36, 0.15)';
         const winCols = Math.floor((w - 40) / 35);
         for (let i = 0; i < winCols; i++) {
           const wx = x + 25 + i * 35;
           ctx.fillRect(wx, y + 36, 18, 28);
-          // Lattice bars
           ctx.strokeStyle = '#09080e';
           ctx.lineWidth = 2;
           ctx.strokeRect(wx, y + 36, 18, 28);
@@ -918,7 +1034,6 @@
           ctx.stroke();
         }
 
-        // 3. Hanging Lanterns
         const now = Date.now() * 0.003;
         for (let l of this.lanterns) {
           const swing = Math.sin(now + l.swingAngle) * 0.12;
@@ -926,14 +1041,12 @@
           ctx.translate(l.x, l.y);
           ctx.rotate(swing);
 
-          // Cord
           ctx.strokeStyle = '#374151';
           ctx.lineWidth = 1.5;
           ctx.beginPath();
           ctx.moveTo(0, 0); ctx.lineTo(0, 16);
           ctx.stroke();
 
-          // Amber Glowing Paper Lantern
           ctx.shadowColor = '#f59e0b';
           ctx.shadowBlur = 14;
           ctx.fillStyle = '#f59e0b';
@@ -943,7 +1056,6 @@
           ctx.fillRect(-8, 14, 16, 3);
           ctx.fillRect(-8, 35, 16, 3);
 
-          // Soft kanji silhouette in lantern
           ctx.fillStyle = '#451a03';
           ctx.fillRect(-3, 22, 6, 8);
 
@@ -959,7 +1071,7 @@
     }
 
     // =========================================================================
-    // 6. ATMOSPHERIC PARTICLES: SAKURA (Cherry Blossom) & EMBERS
+    // 5. ATMOSPHERIC & COMBAT PARTICLE SYSTEMS
     // =========================================================================
     class ParticleManager {
       constructor(canvasWidth, canvasHeight) {
@@ -969,8 +1081,9 @@
         this.sparks = [];
         this.dustPuffs = [];
         this.healSparkles = [];
+        this.bloodDroplets = [];
+        this.bloodSplats = [];
 
-        // Spawn sakura petals
         for (let i = 0; i < 45; i++) {
           this.petals.push({
             x: Math.random() * canvasWidth,
@@ -988,6 +1101,37 @@
       resize(w, h) {
         this.width = w;
         this.height = h;
+      }
+
+      spawnBlood(x, y, vx, vy, hpPct, isFatalOrHeadshot) {
+        let count;
+        if (isFatalOrHeadshot) {
+          count = 28 + Math.floor(Math.random() * 14);
+        } else if (hpPct < 0.30) {
+          count = 18 + Math.floor(Math.random() * 9);
+        } else {
+          count = 6 + Math.floor(Math.random() * 4);
+        }
+
+        const baseAngle = Math.atan2(vy, vx);
+        const bloodColors = ['#e11d48', '#be123c', '#9f1239', '#881337', '#b91c1c'];
+
+        for (let i = 0; i < count; i++) {
+          const spread = (Math.random() - 0.5) * 1.5;
+          const angle = baseAngle + spread;
+          const speed = 1.8 + Math.random() * (isFatalOrHeadshot ? 8.5 : 5.5);
+
+          this.bloodDroplets.push({
+            x: x,
+            y: y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed - (1.2 + Math.random() * 2.2),
+            radius: 1.4 + Math.random() * (isFatalOrHeadshot ? 2.4 : 1.6),
+            color: bloodColors[Math.floor(Math.random() * bloodColors.length)],
+            alpha: 1.0,
+            decay: 0.012 + Math.random() * 0.008
+          });
+        }
       }
 
       spawnImpactSparks(x, y, count = 16, isCrit = false) {
@@ -1038,8 +1182,7 @@
         }
       }
 
-      update() {
-        // Petals
+      update(platforms = []) {
         for (let p of this.petals) {
           p.x += p.speedX + Math.sin(Date.now() * 0.002 + p.y * 0.01) * 0.5;
           p.y += p.speedY;
@@ -1050,18 +1193,16 @@
             p.x = Math.random() * this.width;
           }
         }
-        // Sparks
         for (let i = this.sparks.length - 1; i >= 0; i--) {
           const s = this.sparks[i];
           s.x += s.vx;
           s.y += s.vy;
-          s.vy += 0.15; // Gravity
+          s.vy += 0.15;
           s.alpha -= s.decay;
           if (s.alpha <= 0) {
             this.sparks.splice(i, 1);
           }
         }
-        // Dust Puffs
         for (let i = this.dustPuffs.length - 1; i >= 0; i--) {
           const d = this.dustPuffs[i];
           d.x += d.vx;
@@ -1072,7 +1213,6 @@
             this.dustPuffs.splice(i, 1);
           }
         }
-        // Healing Sparkles
         for (let i = this.healSparkles.length - 1; i >= 0; i--) {
           const h = this.healSparkles[i];
           h.y += h.vy;
@@ -1081,11 +1221,96 @@
             this.healSparkles.splice(i, 1);
           }
         }
+        for (let i = this.bloodDroplets.length - 1; i >= 0; i--) {
+          const b = this.bloodDroplets[i];
+          b.x += b.vx;
+          b.y += b.vy;
+          b.vy += 0.28;
+          b.vx *= 0.98;
+
+          let splatted = false;
+          if (platforms && b.vy > 0) {
+            for (let p of platforms) {
+              if (b.x >= p.x - 5 && b.x <= p.x + p.width + 5 && b.y >= p.y - 4 && b.y <= p.y + 16) {
+                this.bloodSplats.push({
+                  x: b.x,
+                  y: p.y + (Math.random() * 2),
+                  rx: b.radius * (1.8 + Math.random() * 1.4),
+                  ry: b.radius * (0.6 + Math.random() * 0.4),
+                  color: b.color,
+                  alpha: 0.85,
+                  decay: 0.0022
+                });
+                splatted = true;
+                break;
+              }
+            }
+          }
+
+          if (splatted || b.y > 850) {
+            this.bloodDroplets.splice(i, 1);
+          }
+        }
+        for (let i = this.bloodSplats.length - 1; i >= 0; i--) {
+          const s = this.bloodSplats[i];
+          s.alpha -= s.decay;
+          if (s.alpha <= 0) {
+            this.bloodSplats.splice(i, 1);
+          }
+        }
       }
 
-      render(ctx) {
+      renderWorld(ctx) {
+        for (let s of this.bloodSplats) {
+          ctx.save();
+          ctx.globalAlpha = Math.max(0, s.alpha);
+          ctx.fillStyle = s.color;
+          ctx.beginPath();
+          ctx.ellipse(s.x, s.y, s.rx, s.ry, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        for (let b of this.bloodDroplets) {
+          ctx.save();
+          ctx.globalAlpha = Math.max(0, b.alpha);
+          ctx.fillStyle = b.color;
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        for (let s of this.sparks) {
+          ctx.save();
+          ctx.fillStyle = s.color;
+          ctx.globalAlpha = Math.max(0, s.alpha);
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        for (let d of this.dustPuffs) {
+          ctx.save();
+          ctx.fillStyle = d.color + Math.max(0, d.alpha) + ')';
+          ctx.beginPath();
+          ctx.arc(d.x, d.y, d.radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        for (let h of this.healSparkles) {
+          ctx.save();
+          ctx.fillStyle = '#22c55e';
+          ctx.shadowColor = '#4ade80';
+          ctx.shadowBlur = 8;
+          ctx.globalAlpha = Math.max(0, h.alpha);
+          ctx.beginPath();
+          ctx.arc(h.x, h.y, h.radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+
+      renderScreen(ctx) {
         ctx.save();
-        // Render Sakura Petals
         for (let p of this.petals) {
           ctx.save();
           ctx.translate(p.x, p.y);
@@ -1096,37 +1321,16 @@
           ctx.fill();
           ctx.restore();
         }
-        // Render Sparks
-        for (let s of this.sparks) {
-          ctx.fillStyle = s.color;
-          ctx.globalAlpha = Math.max(0, s.alpha);
-          ctx.beginPath();
-          ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        // Render Dust Puffs
-        for (let d of this.dustPuffs) {
-          ctx.fillStyle = d.color + Math.max(0, d.alpha) + ')';
-          ctx.beginPath();
-          ctx.arc(d.x, d.y, d.radius, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        // Render Healing Sparkles
-        for (let h of this.healSparkles) {
-          ctx.fillStyle = '#22c55e';
-          ctx.shadowColor = '#4ade80';
-          ctx.shadowBlur = 8;
-          ctx.globalAlpha = Math.max(0, h.alpha);
-          ctx.beginPath();
-          ctx.arc(h.x, h.y, h.radius, 0, Math.PI * 2);
-          ctx.fill();
-        }
         ctx.restore();
+      }
+
+      render(ctx) {
+        this.renderScreen(ctx);
       }
     }
 
     // =========================================================================
-    // 7. MAIN GAME CONTROLLER & SCENE MANAGEMENT
+    // 6. MAIN GAME CONTROLLER & SCENE MANAGEMENT
     // =========================================================================
     class ShadowShurikenGame {
       constructor() {
@@ -1142,7 +1346,7 @@
         // Sound System
         this.sounds = new SoundEngine();
 
-        // Game States: 'START', 'PLAYING', 'AUTO_DASH', 'GAME_OVER'
+        // Game States: 'START', 'PLAYING', 'GAME_OVER'
         this.gameState = 'START';
 
         // Progression Tracking
@@ -1157,18 +1361,13 @@
         this.maxStamina = 100;
         this.timeSinceLastDamage = 9999;
 
-        // Hit Location Highlights (wound marks)
-        this.hitMarkers = [];
-
         // Camera scroll
         this.cameraX = 0;
-        this.targetCameraX = 0;
 
         // Input & Drag-to-Aim
         this.isAiming = false;
         this.pointerStart = { x: 0, y: 0 };
         this.pointerCurrent = { x: 0, y: 0 };
-        this.aimVector = { x: 0, y: 0 };
         this.maxPullDistance = 140;
 
         // Floating Text Popups
@@ -1177,11 +1376,27 @@
         // Setup Physics World
         this.initPhysics();
 
-        // Setup Entities
+        // Entities: Strictly 1 Player, strictly 1 Enemy, exactly 2 Platforms
         this.player = null;
-        this.enemies = [];
+        this.enemy = null;
+        this.leftPlatform = null;
+        this.rightPlatform = null;
         this.platforms = [];
+        this.enemies = [];
         this.projectiles = [];
+
+        // Transition Loop Controllers
+        this.isTransitioning = false;
+        this.transitionPhase = 'NONE'; // 'NONE' | 'JUMP' | 'PAN'
+        this.transitionTimer = 0;
+        this.jumpDuration = 680;
+        this.jumpStartX = 0;
+        this.jumpStartY = 0;
+        this.jumpTargetX = 0;
+        this.jumpTargetY = 0;
+        this.panDuration = 550;
+        this.panStartCamX = 0;
+        this.panTargetCamX = 0;
 
         // Particles
         this.particles = new ParticleManager(this.virtualW, this.virtualH);
@@ -1198,6 +1413,7 @@
             this.isAiming = true;
             this.pointerStart = { x: 300, y: 420 };
             this.pointerCurrent = { x: 210, y: 490 };
+            if (this.player) this.player.isAiming = true;
           }
           if (urlParams.get('fatigue') === '1') {
             this.playerStamina = 15;
@@ -1207,9 +1423,9 @@
           }
         }
 
-        // Enemy AI Interval
+        // Enemy AI (1-out-of-5 accuracy rule: 80% deliberate misses)
         this.enemyAimTimer = 0;
-        this.enemyTelegraphLine = null;
+        this.enemyShotCount = 0;
 
         // Start Loop
         this.lastTime = performance.now();
@@ -1226,13 +1442,12 @@
         const pullClamped = Math.min(pullDist, this.maxPullDistance);
         const baseAngle = Math.atan2(dy, dx);
 
-        // Stamina Fatigue Scaling
         let fatiguePowerScale = 1.0;
         let fatigueWobbleAngle = 0;
         if (this.playerStamina < 25) {
-          const fatPct = (25 - this.playerStamina) / 25; // 0 to 1
-          fatiguePowerScale = 1.0 - fatPct * 0.35; // Power reduced up to 35%
-          fatigueWobbleAngle = Math.sin(Date.now() * 0.035) * fatPct * 0.10; // Aim tremors / shake
+          const fatPct = (25 - this.playerStamina) / 25;
+          fatiguePowerScale = 1.0 - fatPct * 0.35;
+          fatigueWobbleAngle = Math.sin(Date.now() * 0.035) * fatPct * 0.10;
         }
 
         const angle = baseAngle + fatigueWobbleAngle;
@@ -1252,15 +1467,12 @@
           enableSleeping: false
         });
         this.engine.gravity.y = 1.05;
-
-        // Collision Handler
         Matter.Events.on(this.engine, 'collisionStart', (e) => this.handleCollisions(e));
       }
 
       setupEvents() {
         window.addEventListener('resize', () => this.resize());
 
-        // Pointer Controls (Single Mouse & Single Touch Unified)
         const onDown = (e) => {
           this.sounds.init();
           const pos = this.getCanvasPointerPos(e);
@@ -1271,40 +1483,57 @@
           }
 
           if (this.gameState === 'GAME_OVER') {
-            // Check play again button click
             const btnW = 220, btnH = 55;
             const btnX = this.virtualW / 2 - btnW / 2;
-            const btnY = this.virtualH / 2 + 105;
+            const btnY = this.virtualH / 2 + 85;
             if (pos.x >= btnX && pos.x <= btnX + btnW && pos.y >= btnY && pos.y <= btnY + btnH) {
               this.startNewGame();
             }
             return;
           }
 
+          if (this.isTransitioning) return;
+
           if (this.gameState === 'PLAYING' && this.player && !this.player.isDead) {
             this.isAiming = true;
             this.pointerStart = { x: pos.x, y: pos.y };
             this.pointerCurrent = { x: pos.x, y: pos.y };
+            this.player.isAiming = true;
+            this.player.aimPullProgress = 0;
+            this.player.aimAngle = 0;
           }
         };
 
         const onMove = (e) => {
-          if (!this.isAiming) return;
+          if (!this.isAiming || this.isTransitioning) return;
           this.pointerCurrent = this.getCanvasPointerPos(e);
+          if (this.player && !this.player.isDead) {
+            const dx = this.pointerStart.x - this.pointerCurrent.x;
+            const dy = this.pointerStart.y - this.pointerCurrent.y;
+            const pullDist = Math.sqrt(dx * dx + dy * dy);
+            this.player.isAiming = true;
+            this.player.aimPullProgress = Math.min(1.0, pullDist / this.maxPullDistance);
+            this.player.aimAngle = Math.atan2(dy, dx);
+          }
         };
 
         const onUp = (e) => {
           if (!this.isAiming) return;
           this.isAiming = false;
+          if (this.player) {
+            this.player.isAiming = false;
+          }
+          if (this.isTransitioning) return;
 
           const aim = this.getAimLaunchVector();
           if (aim && this.player && !this.player.isDead) {
-            // Launch shuriken along EXACT calculated trajectory vector
             const shuriken = new Shuriken(this.engine, aim.startX, aim.startY, aim.vx, aim.vy, true, this);
             this.projectiles.push(shuriken);
             this.sounds.playThrow();
 
-            // Deduct Stamina
+            const launchAngle = Math.atan2(aim.vy, aim.vx);
+            this.player.triggerThrow(launchAngle);
+
             this.playerStamina = Math.max(0, this.playerStamina - 28);
           }
         };
@@ -1331,7 +1560,6 @@
         this.canvas.width = w;
         this.canvas.height = h;
 
-        // Maintain 16:9 widescreen virtual ratio
         const targetRatio = this.virtualW / this.virtualH;
         const currentRatio = w / h;
 
@@ -1351,20 +1579,20 @@
       }
 
       startNewGame() {
-        // Clear old entities
         if (this.player) this.player.destroy();
-        for (let e of this.enemies) e.destroy();
+        if (this.enemy) this.enemy.destroy();
         for (let p of this.platforms) p.destroy();
         for (let s of this.projectiles) s.destroy();
 
         this.player = null;
+        this.enemy = null;
         this.enemies = [];
         this.platforms = [];
         this.projectiles = [];
         this.popups = [];
-        this.hitMarkers = [];
 
-        // Reset Progression & Stamina
+        this.isTransitioning = false;
+        this.transitionPhase = 'NONE';
         this.playerStamina = 100;
         this.maxStamina = 100;
         this.timeSinceLastDamage = 9999;
@@ -1373,82 +1601,86 @@
         this.kills = 0;
         this.headshots = 0;
         this.cameraX = 0;
-        this.targetCameraX = 0;
+        this.enemyShotCount = 0;
 
-        // Build Initial Rooftops
-        this.spawnEncounter(0);
-
-        this.gameState = 'PLAYING';
-      }
-
-      spawnEncounter(currentRooftopStartX) {
-        // Platform 1: Player Rooftop
+        // Platform 1: Left Platform (Player Rooftop)
         const playerPlatformW = 280;
         const playerPlatformH = 260;
         const playerY = 490;
-        const p1 = new RooftopPlatform(this.engine, currentRooftopStartX + 80, playerY, playerPlatformW, playerPlatformH);
-        this.platforms.push(p1);
+        this.leftPlatform = new RooftopPlatform(this.engine, 80, playerY, playerPlatformW, playerPlatformH);
 
-        // Spawn or reposition Player
-        const playerSpawnX = currentRooftopStartX + 220;
-        const playerSpawnY = playerY - 32;
-        if (!this.player) {
-          this.player = new ShinobiRagdoll(this.engine, playerSpawnX, playerSpawnY, true, { health: 100 });
-        } else {
-          this.player.homeX = playerSpawnX;
-          this.player.homeY = playerSpawnY;
-          Matter.Body.setPosition(this.player.torso, { x: playerSpawnX, y: playerSpawnY });
-          Matter.Body.setVelocity(this.player.torso, { x: 0, y: 0 });
-        }
+        // Single Player instance (created once)
+        this.player = new ShinobiRagdoll(this.engine, 220, playerY - 32, true, { health: 100 });
 
-        // Platform 2: Opponent Rooftop (Distance Scaled)
-        const distanceTier = this.distanceMeters;
-        const gap = 380 + Math.min(distanceTier * 0.4, 220) + (Math.random() * 60 - 30);
-        const enemyX = currentRooftopStartX + playerPlatformW + gap;
-
-        // Variable Elevation (+/- 75px based on distance)
-        let elevOffset = 0;
-        if (distanceTier > 100) {
-          elevOffset = (Math.random() - 0.5) * Math.min(distanceTier * 0.35, 120);
-        }
-        const enemyPlatformY = Math.min(540, Math.max(380, playerY + elevOffset));
+        // Platform 2: Right Platform (Opponent Rooftop)
+        const enemyX = 760;
         const enemyPlatformW = 260;
-        const p2 = new RooftopPlatform(this.engine, enemyX, enemyPlatformY, enemyPlatformW, 300);
-        this.platforms.push(p2);
+        this.rightPlatform = new RooftopPlatform(this.engine, enemyX, playerY, enemyPlatformW, 300);
 
-        // Spawn Enemy Shinobi
-        const isArmored = distanceTier >= 250 && Math.random() > 0.45;
-        const enemyHealth = distanceTier > 300 ? 110 : (distanceTier > 120 ? 90 : 70);
-        const enemyNinja = new ShinobiRagdoll(this.engine, enemyX + 80, enemyPlatformY - 32, false, {
-          health: enemyHealth,
-          isArmored: isArmored
+        this.platforms = [this.leftPlatform, this.rightPlatform];
+
+        // Single Enemy instance
+        this.enemy = new ShinobiRagdoll(this.engine, enemyX + 80, playerY - 32, false, {
+          health: 70,
+          isArmored: false
         });
-        this.enemies.push(enemyNinja);
+        this.enemies = [this.enemy];
 
-        // Second staggered enemy on high distance tiers (250m+)
-        if (distanceTier >= 350 && Math.random() > 0.5) {
-          const p3 = new RooftopPlatform(this.engine, enemyX + enemyPlatformW + 140, enemyPlatformY - 70, 190, 360);
-          this.platforms.push(p3);
-          const enemy2 = new ShinobiRagdoll(this.engine, enemyX + enemyPlatformW + 210, enemyPlatformY - 102, false, {
-            health: 60,
-            isArmored: false
-          });
-          this.enemies.push(enemy2);
-        }
-
-        // Reset enemy attack timer
         this.resetEnemyTimer();
+        this.gameState = 'PLAYING';
       }
 
       resetEnemyTimer() {
-        // Scaled aim interval
-        const dist = this.distanceMeters;
-        if (dist < 100) {
-          this.enemyAimTimer = 3400 + Math.random() * 800; // Slow, beginner-friendly
-        } else if (dist < 250) {
-          this.enemyAimTimer = 2500 + Math.random() * 600;
-        } else {
-          this.enemyAimTimer = 1900 + Math.random() * 500; // Fast elite
+        // Relaxed rhythm: 3.2s to 3.8s total cycle (2.2s idle + 0.8s windup + 0.2s throw + 0.5s rest)
+        this.enemyAimTimer = 3200 + Math.random() * 600;
+      }
+
+      onShurikenHit(shuriken, targetBody, forceHeadshot = false) {
+        if (!shuriken || shuriken.isStuck) return;
+        const ragdoll = targetBody.ragdollOwner;
+        if (!ragdoll || ragdoll.isDead) return;
+
+        if (shuriken.isPlayer && !ragdoll.isPlayer) {
+          const isHeadshot = forceHeadshot || targetBody.label === 'enemy_head' || targetBody === ragdoll.head || targetBody.isHead;
+          const damage = isHeadshot ? 999 : (targetBody.label === 'enemy_torso' ? 45 : 30);
+
+          const hitVx = shuriken.body.velocity.x * 0.003;
+          const hitVy = shuriken.body.velocity.y * 0.003 - 0.01;
+
+          const res = ragdoll.applyHit(damage, targetBody, { x: hitVx, y: hitVy }, isHeadshot);
+          shuriken.stickTo(targetBody);
+
+          // Sparks & HP-Scaled Blood
+          this.particles.spawnImpactSparks(shuriken.body.position.x, shuriken.body.position.y, isHeadshot ? 38 : 16, isHeadshot);
+          const remainingHpPct = Math.max(0, ragdoll.health / ragdoll.maxHealth);
+          this.particles.spawnBlood(
+            shuriken.body.position.x,
+            shuriken.body.position.y,
+            shuriken.body.velocity.x,
+            shuriken.body.velocity.y,
+            remainingHpPct,
+            isHeadshot || res.defeated
+          );
+          this.sounds.playHit(isHeadshot);
+
+          if (isHeadshot) {
+            this.headshots++;
+            this.goldCoins += 25;
+            this.sounds.playCoin();
+            this.addPopup(targetBody.position.x, targetBody.position.y - 30, 'CRITICAL / HEADSHOT!', '#fbbf24', true);
+            this.addPopup(targetBody.position.x, targetBody.position.y - 58, '+25 COINS', '#f59e0b');
+          } else {
+            this.addPopup(targetBody.position.x, targetBody.position.y - 25, `-${damage}`, '#f43f5e');
+            if (res.defeated) {
+              this.goldCoins += 10;
+              this.sounds.playCoin();
+              this.addPopup(targetBody.position.x, targetBody.position.y - 50, '+10 COINS', '#f59e0b');
+            }
+          }
+
+          if (res.defeated) {
+            this.triggerEncounterVictory();
+          }
         }
       }
 
@@ -1458,7 +1690,6 @@
           const bodyA = pair.bodyA;
           const bodyB = pair.bodyB;
 
-          // Check Shuriken hits
           const shurikenBody = bodyA.shurikenRef ? bodyA : (bodyB.shurikenRef ? bodyB : null);
           const targetBody = bodyA === shurikenBody ? bodyB : bodyA;
 
@@ -1470,84 +1701,32 @@
 
             // Player Shuriken hitting Enemy
             if (shuriken.isPlayer && ragdoll && !ragdoll.isPlayer && !ragdoll.isDead) {
-              const isHeadshot = targetBody.label === 'enemy_head';
-              const damage = isHeadshot ? 999 : (targetBody.label === 'enemy_torso' ? 45 : 30);
-
-              const hitVx = shurikenBody.velocity.x * 0.003;
-              const hitVy = shurikenBody.velocity.y * 0.003 - 0.01;
-
-              const res = ragdoll.applyHit(damage, targetBody, { x: hitVx, y: hitVy }, isHeadshot);
-              shuriken.stickTo(targetBody);
-
-              // Record Wound / Hit Location Highlight on the exact body part
-              const cos = Math.cos(-targetBody.angle);
-              const sin = Math.sin(-targetBody.angle);
-              const dx = shurikenBody.position.x - targetBody.position.x;
-              const dy = shurikenBody.position.y - targetBody.position.y;
-              this.hitMarkers.push({
-                targetBody: targetBody,
-                localX: dx * cos - dy * sin,
-                localY: dx * sin + dy * cos,
-                isHeadshot: isHeadshot,
-                color: isHeadshot ? '#fbbf24' : '#ff003c',
-                alpha: 1.0,
-                lifeTime: 1400
-              });
-
-              // Effects
-              this.particles.spawnImpactSparks(shurikenBody.position.x, shurikenBody.position.y, isHeadshot ? 28 : 14, isHeadshot);
-              this.sounds.playHit(isHeadshot);
-
-              if (isHeadshot) {
-                this.headshots++;
-                this.addPopup(targetBody.position.x, targetBody.position.y - 25, 'CRITICAL HEADSHOT!', '#fbbf24', true);
-                const coinReward = 20;
-                this.goldCoins += coinReward;
-                this.sounds.playCoin();
-                this.addPopup(targetBody.position.x, targetBody.position.y - 50, `+${coinReward} COINS`, '#f59e0b');
-              } else {
-                this.addPopup(targetBody.position.x, targetBody.position.y - 25, `-${damage}`, '#f43f5e');
-                if (res.defeated) {
-                  const coinReward = 10;
-                  this.goldCoins += coinReward;
-                  this.sounds.playCoin();
-                  this.addPopup(targetBody.position.x, targetBody.position.y - 50, `+${coinReward} COINS`, '#f59e0b');
-                }
-              }
-
-              // Check if all enemies in encounter are cleared
-              this.checkEncounterCleared();
+              const isHeadshot = targetBody.label === 'enemy_head' || targetBody === ragdoll.head || targetBody.isHead;
+              this.onShurikenHit(shuriken, targetBody, isHeadshot);
             }
 
-            // Enemy Shuriken hitting Player
+            // Enemy Shuriken hitting Player (Aimed at torso/body only - NO HEADSHOTS ON PLAYER)
             if (!shuriken.isPlayer && ragdoll && ragdoll.isPlayer && !ragdoll.isDead) {
-              const isHeadshot = targetBody.label === 'player_head';
-              const damage = isHeadshot ? 65 : 30;
+              const damage = 25; // Balanced body damage only
 
-              this.timeSinceLastDamage = 0; // Interrupt passive healing
+              this.timeSinceLastDamage = 0;
               const hitVx = shurikenBody.velocity.x * 0.003;
               const hitVy = shurikenBody.velocity.y * 0.003 - 0.01;
 
-              ragdoll.applyHit(damage, targetBody, { x: hitVx, y: hitVy }, isHeadshot);
+              ragdoll.applyHit(damage, targetBody, { x: hitVx, y: hitVy }, false);
               shuriken.stickTo(targetBody);
 
-              // Record Wound / Hit Location Highlight on Player
-              const cos = Math.cos(-targetBody.angle);
-              const sin = Math.sin(-targetBody.angle);
-              const dx = shurikenBody.position.x - targetBody.position.x;
-              const dy = shurikenBody.position.y - targetBody.position.y;
-              this.hitMarkers.push({
-                targetBody: targetBody,
-                localX: dx * cos - dy * sin,
-                localY: dx * sin + dy * cos,
-                isHeadshot: isHeadshot,
-                color: '#ef4444',
-                alpha: 1.0,
-                lifeTime: 1400
-              });
-
-              this.particles.spawnImpactSparks(shurikenBody.position.x, shurikenBody.position.y, 16, isHeadshot);
-              this.sounds.playHit(isHeadshot);
+              this.particles.spawnImpactSparks(shurikenBody.position.x, shurikenBody.position.y, 16, false);
+              const remainingPlayerHpPct = Math.max(0, ragdoll.health / ragdoll.maxHealth);
+              this.particles.spawnBlood(
+                shurikenBody.position.x,
+                shurikenBody.position.y,
+                shurikenBody.velocity.x,
+                shurikenBody.velocity.y,
+                remainingPlayerHpPct,
+                ragdoll.isDead
+              );
+              this.sounds.playHit(false);
               this.addPopup(targetBody.position.x, targetBody.position.y - 25, `-${damage}`, '#ef4444');
 
               if (ragdoll.isDead) {
@@ -1555,12 +1734,12 @@
               }
             }
 
-            // Shuriken hitting Rooftop Tile (Platform Ground)
+            // Shuriken hitting Rooftop Platform
             if (targetBody.label === 'platform') {
               if (!shuriken.isStuck && !shuriken.isGroundStuck) {
                 shuriken.isGroundStuck = true;
                 shuriken.isStuck = true;
-                shuriken.groundStuckTimer = 2500; // Stay stuck for 2.5 seconds before despawn
+                shuriken.groundStuckTimer = 2500;
                 Matter.Body.setVelocity(shuriken.body, { x: 0, y: 0 });
                 Matter.Body.setAngularVelocity(shuriken.body, 0);
                 this.particles.spawnImpactSparks(shurikenBody.position.x, shurikenBody.position.y, 8, false);
@@ -1570,60 +1749,98 @@
         }
       }
 
-      checkEncounterCleared() {
-        const allEnemiesDefeated = this.enemies.every(e => e.isDead);
-        if (allEnemiesDefeated && this.gameState === 'PLAYING') {
-          this.kills++;
-          // Trigger Auto-Dash to next rooftop
-          setTimeout(() => {
-            if (this.gameState === 'PLAYING') {
-              this.startAutoDash();
-            }
-          }, 450);
-        }
+      triggerEncounterVictory() {
+        if (this.isTransitioning) return; // TRIGGER ONCE LOCK!
+        this.isTransitioning = true;
+        this.kills++;
+
+        // Allow 650ms for enemy to collapse backward and lie flat on the rooftop floor!
+        setTimeout(() => {
+          if (this.gameState === 'PLAYING') {
+            this.startTransitionJump();
+          }
+        }, 650);
       }
 
-      startAutoDash() {
-        this.gameState = 'AUTO_DASH';
+      startTransitionJump() {
+        // Clear all active flying shurikens
+        for (let p of this.projectiles) p.destroy();
+        this.projectiles = [];
+
+        // Athletic Jump to Right Platform
+        this.transitionPhase = 'JUMP';
+        this.transitionTimer = 0;
+        this.jumpDuration = 700;
+
+        this.jumpStartX = this.player.torso.position.x;
+        this.jumpStartY = this.player.torso.position.y;
+        this.jumpTargetX = this.rightPlatform.x + 80;
+        this.jumpTargetY = this.rightPlatform.y - 32;
+
+        this.player.isJumping = true;
+        this.player.isWalking = false;
         this.sounds.playDash();
+      }
 
-        // Increment Distance (+38m to +50m per cleared rooftop)
-        const distanceGain = 42 + Math.floor(Math.random() * 10);
-        this.distanceMeters += distanceGain;
+      completeWorldShiftAndSpawnNext() {
+        // 1. Destroy old left platform and dead enemy behind player
+        if (this.leftPlatform) {
+          this.leftPlatform.destroy();
+        }
+        if (this.enemy) {
+          this.enemy.destroy();
+          this.enemy = null;
+          this.enemies = [];
+        }
 
+        // 2. The right platform where player just landed becomes the left platform!
+        this.leftPlatform = this.rightPlatform;
+
+        // Ensure Player Health & HUD persistence across transitions
+        if (isNaN(this.player.health) || this.player.health <= 0) {
+          this.player.health = Math.max(1, this.player.health || 100);
+        }
+        this.player.maxHealth = 100;
+        this.player.hp = this.player.health;
+        this.player.maxHp = 100;
+
+        // 3. Spawn fresh NEW right platform ahead
+        const distanceTier = this.distanceMeters;
+        const gap = 380 + Math.min(distanceTier * 0.35, 140) + (Math.random() * 40 - 20);
+        const enemyX = this.leftPlatform.x + this.leftPlatform.width + gap;
+
+        // Variable elevation (+/- 60px)
+        const elevOffset = distanceTier > 80 ? (Math.random() - 0.5) * Math.min(distanceTier * 0.3, 100) : 0;
+        const enemyPlatformY = Math.min(540, Math.max(400, 490 + elevOffset));
+        const enemyPlatformW = 260;
+        this.rightPlatform = new RooftopPlatform(this.engine, enemyX, enemyPlatformY, enemyPlatformW, 300);
+
+        this.platforms = [this.leftPlatform, this.rightPlatform];
+
+        // 4. Spawn single fresh new enemy perched on right platform
+        const isArmored = distanceTier >= 200 && Math.random() > 0.45;
+        const enemyHealth = distanceTier > 300 ? 110 : (distanceTier > 120 ? 90 : 70);
+        this.enemy = new ShinobiRagdoll(this.engine, enemyX + 80, enemyPlatformY - 32, false, {
+          health: enemyHealth,
+          isArmored: isArmored
+        });
+        this.enemies = [this.enemy];
+
+        // 5. Increment Distance meter (+40m to +50m)
+        const distGain = 40 + Math.floor(Math.random() * 11);
+        this.distanceMeters += distGain;
         if (this.distanceMeters > this.bestDistance) {
           this.bestDistance = this.distanceMeters;
           localStorage.setItem('rooftop_shinobi_best', this.bestDistance.toString());
         }
 
-        // Camera target moves to right platform
-        const nextPlatform = this.platforms[this.platforms.length - 1];
-        const nextX = nextPlatform ? nextPlatform.x - 120 : this.cameraX + 500;
-        this.targetCameraX = nextX;
-      }
+        // 6. Camera smooth target: frame the player on their new platform
+        this.targetCameraX = this.leftPlatform.x - 80;
 
-      onArriveAtNextRooftop() {
-        this.gameState = 'PLAYING';
-
-        // Clean up far left offscreen entities to keep performance locked at 60 FPS
-        const cutoffX = this.cameraX - 600;
-        this.platforms = this.platforms.filter(p => {
-          if (p.x + p.width < cutoffX) {
-            p.destroy();
-            return false;
-          }
-          return true;
-        });
-        this.enemies = this.enemies.filter(e => {
-          if (e.homeX < cutoffX) {
-            e.destroy();
-            return false;
-          }
-          return true;
-        });
-
-        // Spawn next forward encounter ahead
-        this.spawnEncounter(this.cameraX + 80);
+        // 7. Reset transition locks & resume aiming controls
+        this.isTransitioning = false;
+        this.transitionPhase = 'NONE';
+        this.resetEnemyTimer();
       }
 
       triggerGameOver() {
@@ -1651,51 +1868,95 @@
       }
 
       updateAI(delta) {
-        if (this.gameState !== 'PLAYING' || !this.player || this.player.isDead) {
-          this.enemyTelegraphLine = null;
-          return;
-        }
-
-        const activeEnemy = this.enemies.find(e => !e.isDead);
-        if (!activeEnemy) {
-          this.enemyTelegraphLine = null;
+        if (this.gameState !== 'PLAYING' || this.isTransitioning || !this.player || this.player.isDead || !this.enemy || this.enemy.isDead) {
           return;
         }
 
         this.enemyAimTimer -= delta;
 
-        // Telegraph aiming line in the final 1.1s before firing
-        if (this.enemyAimTimer <= 1100 && this.enemyAimTimer > 0) {
-          this.enemyTelegraphLine = {
-            startX: activeEnemy.torso.position.x - 16,
-            startY: activeEnemy.torso.position.y - 8,
-            targetX: this.player.torso.position.x,
-            targetY: this.player.torso.position.y,
-            alpha: Math.abs(Math.sin(Date.now() * 0.012)) * 0.85
-          };
+        // Relaxed Enemy Rhythm (3.2s - 3.8s cycle):
+        // - Idle / Aim Pause (approx 2.2s - 2.8s): while enemyAimTimer > 1000ms, enemy rests naturally
+        // - Windup Charge Animation (0.8s): while enemyAimTimer is between 1000ms and 200ms
+        // - Throw Hold: 200ms before release
+        const windupStart = 1000;
+        const windupEnd = 200;
+        if (this.enemyAimTimer <= windupStart && this.enemyAimTimer > windupEnd) {
+          this.enemy.isAiming = true;
+          this.enemy.aimPullProgress = (windupStart - this.enemyAimTimer) / (windupStart - windupEnd);
+        } else if (this.enemyAimTimer <= windupEnd && this.enemyAimTimer > 0) {
+          this.enemy.isAiming = true;
+          this.enemy.aimPullProgress = 1.0;
         } else {
-          this.enemyTelegraphLine = null;
+          this.enemy.isAiming = false;
         }
 
         if (this.enemyAimTimer <= 0) {
-          // Fire enemy shuriken
-          const startX = activeEnemy.torso.position.x - 20;
-          const startY = activeEnemy.torso.position.y - 10;
-          const targetX = this.player.torso.position.x + (Math.random() * 24 - 12);
-          const targetY = this.player.torso.position.y - 12 + (Math.random() * 20 - 10);
+          this.enemy.isAiming = false;
+
+          // 1-OUT-OF-5 ACCURACY RULE (80% DELIBERATE MISSES)
+          this.enemyShotCount = (this.enemyShotCount || 0) + 1;
+          const shotCycle = (this.enemyShotCount - 1) % 5;
+          const isAccurate = (shotCycle === 0); // Only Shot 1 in every 5 is accurate
+
+          const startX = this.enemy.torso.position.x - 20;
+          const startY = this.enemy.torso.position.y - 10;
+
+          // 1. FORCE LOWER TARGETING: Aim strictly at LOWER BODY / WAIST (ABSOLUTELY NO HEADSHOTS)
+          const targetX = this.player.torso.position.x;
+          const targetY = this.player.torso.position.y + 35; // Lower body / waist (well below head)
 
           const dx = targetX - startX;
           const dy = targetY - startY;
 
-          // Ballistic arc calculation
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          const speed = Math.max(16, Math.min(26, dist * 0.038));
-          const angle = Math.atan2(dy, dx) - 0.22; // Lofted angle
+          const gravity = 0.32;
+          const flightSteps = 36;
 
-          const vx = Math.cos(angle) * speed;
-          const vy = Math.sin(angle) * speed;
+          let vx = dx / flightSteps;
+          let vy = (dy - 0.5 * gravity * flightSteps * flightSteps) / flightSteps;
 
-          const shuriken = new Shuriken(this.engine, startX, startY, vx, vy, false);
+          if (isAccurate) {
+            // Trajectory Head-Intersection Safety: Verify flight path does not clip head hitbox
+            const headX = this.player.head.position.x;
+            const headY = this.player.head.position.y;
+            let nearHead = false;
+            for (let step = 0; step <= flightSteps; step++) {
+              const px = startX + vx * step;
+              const py = startY + vy * step + 0.5 * gravity * step * step;
+              if (Math.hypot(px - headX, py - headY) < 24) {
+                nearHead = true;
+                break;
+              }
+            }
+            if (nearHead) {
+              // Automatically clamp/reduce launch power and drop trajectory safely into lower torso
+              vy += 0.85;
+              vx *= 0.94;
+            }
+          } else {
+            // 80% Deliberate Misses (Shots 2, 3, 4, 5)
+            if (shotCycle === 1) {
+              // Shot 2: Intentional Overhead Miss (+14 deg loft / +22% power)
+              vx *= 1.22;
+              vy *= 1.15;
+            } else if (shotCycle === 2) {
+              // Shot 3: Intentional Undershoot onto platform in front of player (-25% power)
+              vx *= 0.75;
+              vy *= 0.82;
+            } else if (shotCycle === 3) {
+              // Shot 4: Intentional Short Drop into gap (-35% power)
+              vx *= 0.65;
+              vy *= 0.76;
+            } else {
+              // Shot 5: High Arching Miss (+14 deg loft, drops harmlessly short)
+              vx *= 0.85;
+              vy -= 1.8;
+            }
+          }
+
+          const throwAngle = Math.atan2(vy, vx);
+          this.enemy.triggerThrow(throwAngle);
+
+          const shuriken = new Shuriken(this.engine, startX, startY, vx, vy, false, this);
           this.projectiles.push(shuriken);
           this.sounds.playThrow();
 
@@ -1704,40 +1965,53 @@
       }
 
       gameLoop(currentTime) {
-        const delta = Math.min(currentTime - this.lastTime, 40);
+        if (!this.lastTime) this.lastTime = currentTime;
+        const delta = Math.max(0, Math.min(currentTime - this.lastTime, 40));
         this.lastTime = currentTime;
 
         // 1. Physics Step
         Matter.Engine.update(this.engine, delta);
 
-        // 2. Camera Interpolation
-        if (this.gameState === 'AUTO_DASH') {
-          const dashSpeed = 0.085;
-          this.cameraX += (this.targetCameraX - this.cameraX) * dashSpeed;
+        // 2. Transition Progression (Athletic Leap with Smooth Camera Lerp)
+        if (this.isTransitioning && this.player && !this.player.isDead) {
+          if (this.transitionPhase === 'JUMP') {
+            this.transitionTimer += delta;
+            const t = Math.min(1.0, this.transitionTimer / this.jumpDuration);
 
-          // Move player sprite forward alongside dash
-          if (this.player && !this.player.isDead) {
-            Matter.Body.setPosition(this.player.torso, {
-              x: this.cameraX + 220,
-              y: this.player.homeY
-            });
-            Matter.Body.setVelocity(this.player.torso, { x: 12, y: 0 });
-          }
+            const currX = this.jumpStartX + (this.jumpTargetX - this.jumpStartX) * t;
+            const baseY = this.jumpStartY + (this.jumpTargetY - this.jumpStartY) * t;
+            const arcApex = 95;
+            const currY = baseY - Math.sin(t * Math.PI) * arcApex;
 
-          if (Math.abs(this.targetCameraX - this.cameraX) < 8) {
-            this.cameraX = this.targetCameraX;
-            this.onArriveAtNextRooftop();
+            this.player.setPosition(currX, currY);
+
+            // Camera smoothly lerps tracking player jump: cameraX += (target - cameraX) * 0.08
+            this.targetCameraX = Math.max(0, currX - 220);
+            this.cameraX += (this.targetCameraX - this.cameraX) * 0.08;
+
+            if (t >= 1.0) {
+              this.player.isJumping = false;
+              this.player.landingTimer = 180;
+              this.particles.spawnDustPuff(this.jumpTargetX - 10, this.jumpTargetY + 34, 14);
+              this.particles.spawnDustPuff(this.jumpTargetX + 10, this.jumpTargetY + 34, 14);
+
+              // Seamlessly spawn next platform without screen flicker
+              this.completeWorldShiftAndSpawnNext();
+            }
           }
+        } else if (this.player && !this.player.isDead) {
+          // Smooth continuous camera lerp tracking player perch
+          this.targetCameraX = Math.max(0, this.player.torso.position.x - 220);
+          this.cameraX += (this.targetCameraX - this.cameraX) * 0.08;
         }
 
-        // 3. Stamina Regeneration & Passive Healing
+        // 3. Stamina Regeneration (Reduced by ~60% to +0.30 per frame / ~18 per second)
         if (this.gameState === 'PLAYING') {
-          // Regenerate stamina when not dragging
           if (!this.isAiming) {
-            this.playerStamina = Math.min(this.maxStamina, this.playerStamina + (delta / 1000) * 32);
+            const staminaGain = (delta / 16.66) * 0.30;
+            this.playerStamina = Math.min(this.maxStamina, this.playerStamina + staminaGain);
           }
 
-          // Passive Healing: after 2.5s without taking damage
           this.timeSinceLastDamage += delta;
           if (this.timeSinceLastDamage > 2500 && this.player && !this.player.isDead && this.player.health < this.player.maxHealth) {
             this.player.health = Math.min(this.player.maxHealth, this.player.health + (delta / 1000) * 5.0);
@@ -1748,31 +2022,31 @@
         }
 
         // 4. Update Entities
-        const isDashing = this.gameState === 'AUTO_DASH';
         if (this.player) {
-          this.player.update(currentTime, delta, isDashing);
+          if (this.isAiming && !this.isTransitioning && !this.player.isDead) {
+            this.player.isAiming = true;
+          }
+          this.player.update(currentTime, delta);
           if (this.player.torso.position.y > 660 && !this.player.isDead) {
-            // Fallen off rooftop ledge
             this.player.health = 0;
             this.player.triggerRagdollDefeat();
             this.triggerGameOver();
           }
         }
 
-        for (let enemy of this.enemies) {
-          enemy.update(currentTime, delta, false);
-          // Check if enemy was knocked off the ledge
-          if (enemy.torso.position.y > 650 && !enemy.isDead) {
-            enemy.health = 0;
-            enemy.triggerRagdollDefeat();
-            this.addPopup(enemy.torso.position.x, 600, 'FALLEN!', '#f43f5e');
+        if (this.enemy) {
+          this.enemy.update(currentTime, delta);
+          if (this.enemy.torso.position.y > 650 && !this.enemy.isDead) {
+            this.enemy.health = 0;
+            this.enemy.triggerRagdollDefeat();
+            this.addPopup(this.enemy.torso.position.x, 600, 'FALLEN!', '#f43f5e');
             this.goldCoins += 15;
             this.sounds.playCoin();
-            this.checkEncounterCleared();
+            this.triggerEncounterVictory();
           }
         }
 
-        // Update Projectiles & Despawn Ground Misses
+        // Update Projectiles
         for (let i = this.projectiles.length - 1; i >= 0; i--) {
           const p = this.projectiles[i];
           p.update(currentTime, delta);
@@ -1785,10 +2059,10 @@
         // Update AI
         this.updateAI(delta);
 
-        // Update Atmospheric Particles
-        this.particles.update();
+        // Update Particles
+        this.particles.update(this.platforms);
 
-        // Update Floating Popups
+        // Update Popups
         for (let i = this.popups.length - 1; i >= 0; i--) {
           const pop = this.popups[i];
           pop.y += pop.vy;
@@ -1798,7 +2072,7 @@
           }
         }
 
-        // 5. Render Frame
+        // 5. Render
         this.render();
 
         requestAnimationFrame((t) => this.gameLoop(t));
@@ -1808,91 +2082,42 @@
         const ctx = this.ctx;
         ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-        // Apply 16:9 Letterbox / Scaling transform
         ctx.save();
         ctx.translate(this.offsetX, this.offsetY);
         ctx.scale(this.scaleRatio, this.scaleRatio);
 
-        // Clip viewport area
         ctx.beginPath();
         ctx.rect(0, 0, this.virtualW, this.virtualH);
         ctx.clip();
 
-        // 1. Parallax Japanese Sky & Moon
+        // 1. Parallax Japanese Sky & Moon (Screen Space)
         this.renderBackground(ctx);
+
+        // 2. Distant Midground Rooftop Silhouettes (Screen Space Parallax)
+        this.renderMidgroundParallax(ctx);
 
         // Camera Offset Matrix for World Space
         ctx.save();
         ctx.translate(-this.cameraX, 0);
-
-        // 2. Distant Midground Rooftop Silhouettes
-        this.renderMidgroundParallax(ctx);
 
         // 3. Main Rooftops & Platforms
         for (let plat of this.platforms) {
           plat.render(ctx);
         }
 
-        // 4. Enemy AI Telegraph Line
-        if (this.enemyTelegraphLine) {
-          ctx.save();
-          ctx.strokeStyle = `rgba(244, 63, 94, ${this.enemyTelegraphLine.alpha})`;
-          ctx.lineWidth = 2.5;
-          ctx.setLineDash([8, 8]);
-          ctx.beginPath();
-          ctx.moveTo(this.enemyTelegraphLine.startX, this.enemyTelegraphLine.startY);
-          ctx.lineTo(this.enemyTelegraphLine.targetX, this.enemyTelegraphLine.targetY);
-          ctx.stroke();
-          ctx.restore();
-        }
-
-        // 5. Ragdoll Characters
+        // 4. Ragdoll Characters
         if (this.player) this.player.render(ctx);
-        for (let enemy of this.enemies) enemy.render(ctx);
+        if (this.enemy) this.enemy.render(ctx);
 
-        // 6. Hit Location Highlight Markers (Slashes/Wound Bursts)
-        for (let i = this.hitMarkers.length - 1; i >= 0; i--) {
-          const m = this.hitMarkers[i];
-          m.alpha -= (16.6 / m.lifeTime);
-          if (m.alpha <= 0 || !m.targetBody || !m.targetBody.position) {
-            this.hitMarkers.splice(i, 1);
-            continue;
-          }
-          const tCos = Math.cos(m.targetBody.angle);
-          const tSin = Math.sin(m.targetBody.angle);
-          const mx = m.targetBody.position.x + (m.localX * tCos - m.localY * tSin);
-          const my = m.targetBody.position.y + (m.localX * tSin + m.localY * tCos);
-
-          ctx.save();
-          ctx.globalAlpha = Math.max(0, m.alpha);
-          ctx.strokeStyle = m.color;
-          ctx.lineWidth = m.isHeadshot ? 3.5 : 2.5;
-          ctx.shadowColor = m.color;
-          ctx.shadowBlur = 12;
-
-          // Glowing slash mark
-          ctx.beginPath();
-          ctx.moveTo(mx - 9, my - 9); ctx.lineTo(mx + 9, my + 9);
-          ctx.moveTo(mx + 9, my - 9); ctx.lineTo(mx - 9, my + 9);
-          ctx.stroke();
-
-          // Bright wound core dot
-          ctx.fillStyle = '#ffffff';
-          ctx.beginPath();
-          ctx.arc(mx, my, m.isHeadshot ? 4.5 : 3.0, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.restore();
-        }
-
-        // 7. Shurikens
+        // 5. Shurikens
         for (let p of this.projectiles) p.render(ctx);
 
-        // 8. Ballistic Aim Trajectory Arc
-        if (this.isAiming && this.player && !this.player.isDead) {
+        // 6. Ballistic Aim Trajectory Arc (Player only, not during transition)
+        if (this.isAiming && !this.isTransitioning && this.player && !this.player.isDead) {
           this.renderAimTrajectory(ctx);
         }
 
-        // 9. Floating Combat Popups
+        // 7. Floating Combat Popups
         for (let pop of this.popups) {
           ctx.save();
           ctx.font = pop.isCrit ? '900 24px "Cinzel", serif' : 'bold 20px "Cinzel", serif';
@@ -1905,26 +2130,28 @@
           ctx.restore();
         }
 
+        // 8. World Space Combat Particles
+        this.particles.renderWorld(ctx);
+
         ctx.restore(); // Restore Camera
 
-        // 10. Foreground Sakura Petals & Embers
-        this.particles.render(ctx);
+        // 9. Foreground Sakura Petals (Screen Space)
+        this.particles.renderScreen(ctx);
 
-        // 11. Minimalist Shinobi HUD
+        // 10. Minimalist Shinobi HUD
         this.renderHUD(ctx);
 
-        // 12. Screen Overlays (Start / Game Over)
+        // 11. Screen Overlays
         if (this.gameState === 'START') {
           this.renderStartScreen(ctx);
         } else if (this.gameState === 'GAME_OVER') {
           this.renderGameOverScreen(ctx);
         }
 
-        ctx.restore(); // Restore Canvas transform
+        ctx.restore();
       }
 
       renderBackground(ctx) {
-        // Deep purple-tinted dusk gradient
         const skyGrad = ctx.createLinearGradient(0, 0, 0, this.virtualH);
         skyGrad.addColorStop(0, '#0a0314');
         skyGrad.addColorStop(0.45, '#1b092b');
@@ -1933,12 +2160,10 @@
         ctx.fillStyle = skyGrad;
         ctx.fillRect(0, 0, this.virtualW, this.virtualH);
 
-        // Distant Glowing Full Moon
         const moonX = this.virtualW * 0.76;
         const moonY = 160;
         const moonRadius = 64;
 
-        // Moon outer atmospheric halo
         const haloGrad = ctx.createRadialGradient(moonX, moonY, moonRadius * 0.8, moonX, moonY, moonRadius * 2.8);
         haloGrad.addColorStop(0, 'rgba(254, 240, 138, 0.35)');
         haloGrad.addColorStop(0.5, 'rgba(216, 180, 254, 0.12)');
@@ -1948,7 +2173,6 @@
         ctx.arc(moonX, moonY, moonRadius * 2.8, 0, Math.PI * 2);
         ctx.fill();
 
-        // Moon Disk
         ctx.fillStyle = '#fef3c7';
         ctx.shadowColor = '#fef08a';
         ctx.shadowBlur = 24;
@@ -1957,7 +2181,6 @@
         ctx.fill();
         ctx.shadowBlur = 0;
 
-        // Subtle moon craters
         ctx.fillStyle = 'rgba(217, 119, 6, 0.12)';
         ctx.beginPath();
         ctx.arc(moonX - 16, moonY - 14, 14, 0, Math.PI * 2);
@@ -1967,26 +2190,25 @@
       }
 
       renderMidgroundParallax(ctx) {
-        // Parallax Layer 1: Distant Misty Pagoda Silhouettes (Scroll factor: 0.2)
-        const pX1 = this.cameraX * 0.2;
+        const pX1 = this.cameraX * 0.22;
         ctx.fillStyle = '#100a1c';
-        for (let i = -1; i < 7; i++) {
-          const spireX = i * 360 - (pX1 % 360);
+        const startI1 = Math.floor(pX1 / 360) - 1;
+        for (let i = startI1; i < startI1 + 7; i++) {
+          const spireX = i * 360 - pX1;
           this.drawPagodaSpire(ctx, spireX, 320, 70, 240);
         }
 
-        // Parallax Layer 2: Closer Rooftop Spires (Scroll factor: 0.5)
-        const pX2 = this.cameraX * 0.5;
+        const pX2 = this.cameraX * 0.45;
         ctx.fillStyle = '#150f24';
-        for (let i = -1; i < 8; i++) {
-          const spireX = i * 290 - (pX2 % 290);
+        const startI2 = Math.floor(pX2 / 290) - 1;
+        for (let i = startI2; i < startI2 + 8; i++) {
+          const spireX = i * 290 - pX2;
           this.drawPagodaSpire(ctx, spireX, 420, 90, 200);
         }
       }
 
       drawPagodaSpire(ctx, x, y, w, h) {
         ctx.beginPath();
-        // 3 tiers of roofs
         for (let tier = 0; tier < 3; tier++) {
           const tierY = y + tier * (h / 3.4);
           const tierW = w * (1 - tier * 0.16);
@@ -2002,7 +2224,6 @@
         const aim = this.getAimLaunchVector();
         if (!aim) return;
 
-        // Exact gravity step matching Matter.js physics (0.32 px/frame)
         const gravity = 0.32;
         const totalSteps = 28;
 
@@ -2016,7 +2237,6 @@
 
           ctx.beginPath();
           ctx.arc(px, py, dotRadius, 0, Math.PI * 2);
-          // Highlight fatigue with amber, normal with crimson
           ctx.fillStyle = this.playerStamina < 25 ? `rgba(245, 158, 11, ${alpha})` : `rgba(255, 42, 77, ${alpha})`;
           ctx.shadowColor = this.playerStamina < 25 ? '#f59e0b' : '#ff2a4d';
           ctx.shadowBlur = 8;
@@ -2027,6 +2247,8 @@
 
       renderHUD(ctx) {
         ctx.save();
+        ctx.globalAlpha = 1.0;
+        ctx.shadowBlur = 0;
 
         // 1. Top-Center: Large Distance Display
         ctx.textAlign = 'center';
@@ -2049,46 +2271,73 @@
         ctx.shadowBlur = 10;
         ctx.fillText(`🪙 ${this.goldCoins}`, this.virtualW - 32, 48);
 
-        // 3. Top-Left: Player Health & Stamina Bars
+        // 3. Top-Left: Player Health & Stamina HUD Card (Always Guaranteed Visible & Persistent)
         if (this.player) {
-          const hpPct = Math.max(0, this.player.health / this.player.maxHealth);
-          const stamPct = Math.max(0, this.playerStamina / this.maxStamina);
-          const barW = 160;
-          const barX = 32;
+          const maxHp = Number(this.player.maxHealth || this.player.maxHp || 100);
+          const rawHp = this.player.health !== undefined ? this.player.health : (this.player.hp !== undefined ? this.player.hp : maxHp);
+          const currHp = isNaN(rawHp) ? maxHp : Math.max(0, Math.min(maxHp, rawHp));
+          const hpPct = Math.max(0, Math.min(1, currHp / maxHp));
+
+          const rawStam = this.playerStamina !== undefined ? this.playerStamina : 100;
+          const maxStam = Number(this.maxStamina || 100);
+          const currStam = isNaN(rawStam) ? maxStam : Math.max(0, Math.min(maxStam, rawStam));
+          const stamPct = Math.max(0, Math.min(1, currStam / maxStam));
+
+          const barW = 175;
+          const barX = 28;
+
+          // HUD Card Semi-Transparent Background for 100% Contrast & Legibility
+          ctx.fillStyle = 'rgba(8, 6, 14, 0.82)';
+          ctx.strokeStyle = 'rgba(51, 65, 85, 0.75)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(barX - 10, 16, barW + 20, 72, 8);
+          ctx.fill();
+          ctx.stroke();
 
           // Health Bar
-          const hpBarH = 10;
-          const hpBarY = 36;
-          const isPassiveHealing = this.timeSinceLastDamage > 2500 && this.player.health < this.player.maxHealth && !this.player.isDead;
+          const hpBarH = 11;
+          const hpBarY = 40;
+          const isPassiveHealing = this.timeSinceLastDamage > 2500 && currHp < maxHp && !this.player.isDead;
 
           ctx.textAlign = 'left';
-          ctx.fillStyle = isPassiveHealing ? '#4ade80' : '#f8fafc';
-          ctx.font = 'bold 12px "Cinzel", serif';
+          // High-contrast bright teal / white text
+          ctx.fillStyle = isPassiveHealing ? '#2dd4bf' : '#38bdf8';
+          ctx.font = 'bold 12px "Cinzel", "Segoe UI", sans-serif';
           ctx.shadowBlur = 0;
-          ctx.fillText(isPassiveHealing ? `SHINOBI HP (+HEALING)` : `SHINOBI HP`, barX, hpBarY - 5);
+          ctx.fillText(isPassiveHealing ? 'SHINOBI HP (+HEAL)' : 'SHINOBI HP', barX, hpBarY - 6);
 
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+          ctx.textAlign = 'right';
+          ctx.fillStyle = '#f8fafc';
+          ctx.font = 'bold 11px monospace';
+          ctx.fillText(`${Math.ceil(currHp)}/${maxHp}`, barX + barW, hpBarY - 6);
+
+          // Track
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
           ctx.fillRect(barX, hpBarY, barW, hpBarH);
-          ctx.fillStyle = hpPct > 0.3 ? '#10b981' : '#ef4444';
+          // Fill
+          ctx.fillStyle = hpPct > 0.25 ? '#10b981' : '#ef4444';
           ctx.fillRect(barX, hpBarY, barW * hpPct, hpBarH);
-          ctx.strokeStyle = isPassiveHealing ? 'rgba(74, 222, 128, 0.8)' : '#334155';
-          ctx.lineWidth = isPassiveHealing ? 2 : 1.5;
+          // Border
+          ctx.strokeStyle = isPassiveHealing ? '#2dd4bf' : (hpPct > 0.25 ? '#059669' : '#dc2626');
+          ctx.lineWidth = 1.5;
           ctx.strokeRect(barX, hpBarY, barW, hpBarH);
 
           // Stamina Bar
           const stamBarH = 7;
-          const stamBarY = 62;
-          const isFatigued = this.playerStamina < 25;
+          const stamBarY = 67;
+          const isFatigued = currStam < 25;
 
+          ctx.textAlign = 'left';
           ctx.fillStyle = isFatigued ? '#f59e0b' : '#94a3b8';
-          ctx.font = 'bold 11px "Cinzel", serif';
-          ctx.fillText(isFatigued ? `STAMINA (FATIGUED!)` : `STAMINA`, barX, stamBarY - 4);
+          ctx.font = 'bold 11px "Cinzel", "Segoe UI", sans-serif';
+          ctx.fillText(isFatigued ? 'STAMINA (FATIGUE)' : 'STAMINA', barX, stamBarY - 4);
 
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
           ctx.fillRect(barX, stamBarY, barW, stamBarH);
           ctx.fillStyle = isFatigued ? '#f59e0b' : '#38bdf8';
           ctx.fillRect(barX, stamBarY, barW * stamPct, stamBarH);
-          ctx.strokeStyle = isFatigued ? '#b45309' : '#0369a1';
+          ctx.strokeStyle = isFatigued ? '#b45309' : '#0284c7';
           ctx.lineWidth = 1;
           ctx.strokeRect(barX, stamBarY, barW, stamBarH);
         }
@@ -2098,13 +2347,11 @@
 
       renderStartScreen(ctx) {
         ctx.save();
-        // Cinematic dark vignette
         ctx.fillStyle = 'rgba(8, 6, 12, 0.78)';
         ctx.fillRect(0, 0, this.virtualW, this.virtualH);
 
         ctx.textAlign = 'center';
 
-        // Title
         ctx.fillStyle = '#f8fafc';
         ctx.font = '900 48px "Cinzel", serif';
         ctx.shadowColor = '#ff2a4d';
@@ -2116,14 +2363,12 @@
         ctx.shadowBlur = 10;
         ctx.fillText('ROOFTOP SHINOBI', this.virtualW / 2, this.virtualH / 2 - 25);
 
-        // Instructions
         ctx.fillStyle = '#cbd5e1';
         ctx.font = '16px "Cinzel", serif';
         ctx.shadowBlur = 0;
         ctx.fillText('🏹 DRAG BACKWARD TO AIM & RELEASE SHURIKEN', this.virtualW / 2, this.virtualH / 2 + 35);
         ctx.fillText('💀 HEADSHOTS DEAL INSTANT CRITICAL KO & DOUBLE COINS', this.virtualW / 2, this.virtualH / 2 + 65);
 
-        // Tap to Begin Prompt
         const pulse = Math.abs(Math.sin(Date.now() * 0.005));
         ctx.fillStyle = `rgba(251, 191, 36, ${0.7 + pulse * 0.3})`;
         ctx.font = 'bold 22px "Cinzel", serif';
@@ -2134,20 +2379,17 @@
 
       renderGameOverScreen(ctx) {
         ctx.save();
-        // Overlay
         ctx.fillStyle = 'rgba(8, 6, 12, 0.88)';
         ctx.fillRect(0, 0, this.virtualW, this.virtualH);
 
         ctx.textAlign = 'center';
 
-        // Defeat Title
         ctx.fillStyle = '#ef4444';
         ctx.font = '900 50px "Cinzel", serif';
         ctx.shadowColor = '#dc2626';
         ctx.shadowBlur = 24;
         ctx.fillText('SHADOW FALLEN', this.virtualW / 2, this.virtualH / 2 - 110);
 
-        // Run Statistics Card
         ctx.fillStyle = '#f8fafc';
         ctx.font = 'bold 22px "Cinzel", serif';
         ctx.shadowBlur = 0;
@@ -2161,7 +2403,6 @@
         ctx.font = '17px "Cinzel", serif';
         ctx.fillText(`Enemies Vanquished: ${this.kills}  |  Critical Headshots: ${this.headshots}  |  Coins: ${this.goldCoins}`, this.virtualW / 2, this.virtualH / 2 + 25);
 
-        // Play Again Button
         const btnW = 220, btnH = 55;
         const btnX = this.virtualW / 2 - btnW / 2;
         const btnY = this.virtualH / 2 + 85;
@@ -2182,10 +2423,18 @@
       }
     }
 
-    // Launch Game on window load
-    window.addEventListener('load', () => {
-      window.gameInstance = new ShadowShurikenGame();
-    });
+    // Launch Game on window load or DOM ready
+    function initGame() {
+      if (!window.gameInstance) {
+        window.gameInstance = new ShadowShurikenGame();
+      }
+    }
+    if (document.readyState === 'loading') {
+      window.addEventListener('DOMContentLoaded', initGame);
+      window.addEventListener('load', initGame);
+    } else {
+      initGame();
+    }
 
   })();
   </script>
