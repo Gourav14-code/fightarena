@@ -37,6 +37,10 @@
       display: block;
       touch-action: none;
       cursor: crosshair;
+      image-rendering: -moz-crisp-edges;
+      image-rendering: -webkit-crisp-edges;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
     }
   </style>
   <!-- Matter.js 2D Physics Library (Local with CDN fallback) -->
@@ -259,7 +263,7 @@
                 const d = imgData.data;
 
                 // Erase bottom text caption area cleanly
-                const textCutY = isPlayer ? 860 : 960;
+                const textCutY = isPlayer ? 1000 : 960;
                 for (let y = textCutY; y < img.height; y++) {
                   for (let x = 0; x < img.width; x++) {
                     d[(y * img.width + x) * 4 + 3] = 0;
@@ -332,7 +336,7 @@
         this.isRagdoll = false;
         this.staggerTimer = 0;
         this.throwAnimTimer = 0;
-        this.throwDuration = 240;
+        this.throwDuration = 200;
         this.throwAngle = 0;
         this.isAiming = false;
         this.aimPullProgress = 0;
@@ -451,6 +455,10 @@
           ...this.constraints
         ]);
         Matter.Composite.add(this.world, this.composite);
+      }
+
+      get body() {
+        return this.torso;
       }
 
       get hp() {
@@ -608,7 +616,7 @@
 
         this.health = Math.max(0, this.health - damage);
         this.hp = this.health;
-        this.staggerTimer = isHeadshot ? 0 : 340;
+        this.staggerTimer = isHeadshot ? 0 : 300;
 
         if (hitBody && hitBody.position) {
           Matter.Body.applyForce(hitBody, hitBody.position, impulseForce);
@@ -651,29 +659,95 @@
       render(ctx) {
         ctx.save();
 
-        const silhouetteColor = '#111115';
-        const outlineColor = this.isPlayer ? '#2a2a38' : '#331a22';
+        // 2. FIX IMAGE BLUR: Disable image smoothing to ensure crisp, razor-sharp cartoon outlines
+        ctx.imageSmoothingEnabled = false;
+        ctx.webkitImageSmoothingEnabled = false;
+        if (ctx.mozImageSmoothingEnabled !== undefined) ctx.mozImageSmoothingEnabled = false;
+        if (ctx.msImageSmoothingEnabled !== undefined) ctx.msImageSmoothingEnabled = false;
 
-        const sheet = this.isPlayer ? SpriteAssets.playerSheet : SpriteAssets.samuraiSheet;
-        const frames = this.isPlayer ? SpriteAssets.playerFrames : SpriteAssets.samuraiFrames;
-
-        if (sheet && frames) {
-          // Determine active animation frame index from character state machine
-          let frameIndex = 0;
-          if (this.isPlayer) {
+        if (this.isPlayer) {
+          // ===================================================================
+          // PLAYER SHINOBI: 100% 2D SPRITE SHEET WITH 5-FRAME STATE MACHINE
+          // ZERO PROCEDURAL / STICKMAN SHAPES - INVISIBLE MATTER.JS HITBOXES
+          // ===================================================================
+          const sheet = SpriteAssets.playerSheet;
+          if (sheet) {
+            // 4. ANIMATION STATE MACHINE (5 FRAMES)
+            let frameIndex = 0;
             if (this.isDead || this.staggerTimer > 0) {
-              frameIndex = 3; // Frame 3: HURT / HIT IMPACT
+              frameIndex = 3; // Frame 3 (Hit/Hurt): Taking damage (~300ms) or fallen
             } else if (this.isJumping || this.isWalking) {
-              frameIndex = 4; // Frame 4: SPRINT / LEAP
+              frameIndex = 4; // Frame 4 (Leaping/Sprinting): Moving across gap to next platform
             } else if (this.throwAnimTimer > 0) {
-              frameIndex = 2; // Frame 2: THROW
+              frameIndex = 2; // Frame 2 (Throwing): On release (~200ms), then return to Frame 0
             } else if (this.isAiming) {
-              frameIndex = 1; // Frame 1: AIMING / WINDUP
+              frameIndex = 1; // Frame 1 (Aiming): While pointer is down and dragging
             } else {
-              frameIndex = 0; // Frame 0: IDLE stance
+              frameIndex = 0; // Frame 0 (Idle): Default resting stance
             }
-          } else {
-            // Enemy Samurai
+
+            // 3. SPRITE SLICING & ALIGNMENT
+            const totalFrames = 5;
+            const frameWidth = sheet.width / totalFrames; // Exactly image.width / 5 (550.4px)
+            const sy = 140;
+            const sh = 820; // Height covering head-to-toe without empty margins
+
+            const targetHeight = 116; // Character physics height (~110px-120px)
+            const scale = targetHeight / sh;
+            const drawW = frameWidth * scale;
+            const drawH = targetHeight;
+
+            // Root physics body coordinates
+            const posX = this.body.position.x;
+            const posY = this.body.position.y;
+
+            if (this.isDead) {
+              // Defeat pose: collapse backward onto roof and rest flat
+              const t = Math.min(1.0, (this.collapseTimer || 0) / 380);
+              const ease = 1 - Math.cos((t * Math.PI) / 2);
+              const targetFallAngle = -1.48;
+              const currentAngle = targetFallAngle * ease;
+
+              ctx.save();
+              ctx.translate(posX, posY + 26);
+              ctx.rotate(currentAngle);
+              ctx.drawImage(
+                sheet,
+                frameIndex * frameWidth, sy, frameWidth, sh,
+                -drawW / 2, -drawH / 2, drawW, drawH
+              );
+              ctx.restore();
+            } else {
+              // Ground contact shadow when alive and on platform
+              if (!this.isJumping) {
+                ctx.save();
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+                ctx.beginPath();
+                ctx.ellipse(posX, posY + 34, 26, 5.5, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+              }
+
+              ctx.save();
+              // Centered directly over player's root physics body
+              ctx.translate(posX, posY - 14);
+              ctx.rotate(this.torso.angle * 0.4);
+              ctx.drawImage(
+                sheet,
+                frameIndex * frameWidth, sy, frameWidth, sh,
+                -drawW / 2, -drawH / 2, drawW, drawH
+              );
+              ctx.restore();
+            }
+          }
+        } else {
+          // ===================================================================
+          // ENEMY SAMURAI RENDERING (Faces LEFT toward player)
+          // ===================================================================
+          const sheet = SpriteAssets.samuraiSheet;
+          const frames = SpriteAssets.samuraiFrames;
+          if (sheet && frames) {
+            let frameIndex = 0;
             if (this.isDead || this.staggerTimer > 0) {
               frameIndex = 3; // Frame 3: HURT / HIT & ARMOR SPARKS
             } else if (this.throwAnimTimer > 0) {
@@ -683,66 +757,46 @@
             } else {
               frameIndex = 0; // Frame 0: IDLE GUARD
             }
-          }
 
-          const frame = frames[frameIndex] || frames[0];
-          const targetH = this.isPlayer ? 122 : 126;
-          const scale = targetH / frame.sh;
-          const drawW = frame.sw * scale;
-          const drawH = frame.sh * scale;
-
-          if (this.isDead) {
-            // Knockout Defeat Pose: Frame 3 (HURT/FALLEN) collapses backward and lies flat on the rooftop floor (no 360 spin!)
-            const t = Math.min(1.0, (this.collapseTimer || 0) / 380);
-            const ease = 1 - Math.cos((t * Math.PI) / 2);
-            const targetFallAngle = this.isPlayer ? -1.48 : 1.48;
-            const currentAngle = targetFallAngle * ease;
+            const frame = frames[frameIndex] || frames[0];
+            const targetH = 126;
+            const scale = targetH / frame.sh;
+            const drawW = frame.sw * scale;
+            const drawH = frame.sh * scale;
 
             const posX = this.torso.position.x;
             const footY = this.torso.position.y + 34;
 
-            ctx.save();
-            ctx.translate(posX, footY - 8);
-            if (!this.isPlayer) {
-              ctx.scale(-1, 1); // Enemy mirrored horizontally to face LEFT toward player!
-            }
-            ctx.rotate(currentAngle * (this.isPlayer ? 1 : -1));
-            ctx.drawImage(sheet, frame.sx, frame.sy, frame.sw, frame.sh, -frame.anchorX * scale, -frame.anchorY * scale, drawW, drawH);
-            ctx.restore();
-          } else {
-            // Active stance: anchored firmly to platform surface and torso
-            const posX = this.torso.position.x;
-            const footY = this.torso.position.y + 34;
+            if (this.isDead) {
+              const t = Math.min(1.0, (this.collapseTimer || 0) / 380);
+              const ease = 1 - Math.cos((t * Math.PI) / 2);
+              const targetFallAngle = 1.48;
+              const currentAngle = targetFallAngle * ease;
 
-            // Ground contact shadow when alive and on platform
-            if (!this.isJumping) {
               ctx.save();
-              ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-              ctx.beginPath();
-              ctx.ellipse(posX, footY + 1, 26, 5.5, 0, 0, Math.PI * 2);
-              ctx.fill();
+              ctx.translate(posX, footY - 8);
+              ctx.scale(-1, 1); // Enemy mirrored horizontally to face LEFT toward player!
+              ctx.rotate(currentAngle * -1);
+              ctx.drawImage(sheet, frame.sx, frame.sy, frame.sw, frame.sh, -frame.anchorX * scale, -frame.anchorY * scale, drawW, drawH);
+              ctx.restore();
+            } else {
+              if (!this.isJumping) {
+                ctx.save();
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+                ctx.beginPath();
+                ctx.ellipse(posX, footY + 1, 26, 5.5, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+              }
+
+              ctx.save();
+              ctx.translate(posX, footY);
+              ctx.scale(-1, 1); // Enemy mirrored horizontally to face LEFT toward player at all times!
+              ctx.rotate(this.torso.angle * 0.4 * -1);
+              ctx.drawImage(sheet, frame.sx, frame.sy, frame.sw, frame.sh, -frame.anchorX * scale, -frame.anchorY * scale, drawW, drawH);
               ctx.restore();
             }
-
-            ctx.save();
-            ctx.translate(posX, footY);
-            if (!this.isPlayer) {
-              ctx.scale(-1, 1); // Enemy mirrored horizontally to face LEFT toward player at all times!
-            }
-            ctx.rotate(this.torso.angle * 0.4 * (this.isPlayer ? 1 : -1));
-            ctx.drawImage(sheet, frame.sx, frame.sy, frame.sw, frame.sh, -frame.anchorX * scale, -frame.anchorY * scale, drawW, drawH);
-            ctx.restore();
           }
-        } else {
-          // Minimal fallback silhouette while sprites are loading
-          ctx.save();
-          ctx.translate(this.torso.position.x, this.torso.position.y);
-          ctx.rotate(this.torso.angle);
-          ctx.fillStyle = silhouetteColor;
-          ctx.beginPath();
-          ctx.roundRect(-12, -25, 24, 50, 6);
-          ctx.fill();
-          ctx.restore();
         }
 
         // Floating Health Bar above alive characters (anchored strictly to torso body position)
@@ -2088,6 +2142,8 @@
 
       render() {
         const ctx = this.ctx;
+        ctx.imageSmoothingEnabled = false;
+        ctx.webkitImageSmoothingEnabled = false;
         ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
         ctx.save();
