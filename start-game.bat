@@ -1,7 +1,7 @@
 @echo off
-title Monster Knockout
+title Shadow Shuriken: Rooftop Shinobi
 echo ======================================================
-echo Launching Monster Knockout in your browser...
+echo Launching Shadow Shuriken in your browser...
 echo ======================================================
 
 start "" "%~dp0index.html"

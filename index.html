@@ -3,28 +3,3007 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Monster Knockout - Endless Creature Survival</title>
-  <link rel="stylesheet" href="css/style.css">
+  <title>Shadow Shuriken: Rooftop Shinobi</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #08060c;
+      font-family: 'Cinzel', 'Noto Serif JP', 'Georgia', serif;
+      touch-action: none;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    #game-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: #08060c;
+    }
+    canvas {
+      display: block;
+      touch-action: none;
+      cursor: crosshair;
+      image-rendering: -moz-crisp-edges;
+      image-rendering: -webkit-crisp-edges;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+  </style>
+  <!-- Matter.js 2D Physics Library (Local with CDN fallback) -->
+  <script src="matter.min.js"></script>
+  <script>
+    if (typeof Matter === 'undefined') {
+      document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"><\/script>');
+    }
+  </script>
 </head>
 <body>
-  <div id="game-container"></div>
+  <div id="game-container">
+    <canvas id="game-canvas"></canvas>
+  </div>
 
-  <!-- Phaser 3 Framework (Bundled with Matter.js) -->
-  <script src="assets/phaser.min.js"></script>
+  <script>
+  (function() {
+    'use strict';
 
-  <!-- Core Game Systems & Entities -->
-  <script src="src/systems/Trajectory.js"></script>
-  <script src="src/entities/Projectile.js"></script>
-  <script src="src/entities/Arrow.js"></script>
-  <script src="src/entities/RagdollCreature.js"></script>
+    window.addEventListener('error', (e) => {
+      console.error('RUNTIME ERROR:', e.message, e.filename, e.lineno);
+      const errDiv = document.createElement('div');
+      errDiv.id = 'debug-error';
+      errDiv.style = 'position:fixed; top:10px; left:10px; color:#ff4444; background:black; padding:10px; z-index:99999; font-size:16px;';
+      errDiv.textContent = 'ERR: ' + e.message + ' line ' + e.lineno;
+      document.body.appendChild(errDiv);
+    });
 
-  <!-- Core Game Scenes -->
-  <script src="src/scenes/BootScene.js"></script>
-  <script src="src/scenes/MenuScene.js"></script>
-  <script src="src/scenes/GameScene.js"></script>
-  <script src="src/scenes/UIScene.js"></script>
+    // =========================================================================
+    // 1. PROCEDURAL SOUND SYNTHESIZER (Web Audio API)
+    // =========================================================================
+    class SoundEngine {
+      constructor() {
+        this.ctx = null;
+        this.muted = false;
+      }
+      init() {
+        if (!this.ctx) {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          if (AudioContext) {
+            this.ctx = new AudioContext();
+          }
+        }
+        if (this.ctx && this.ctx.state === 'suspended') {
+          this.ctx.resume();
+        }
+      }
+      playThrow() {
+        if (!this.ctx || this.muted) return;
+        const now = this.ctx.currentTime;
+        const bufferSize = this.ctx.sampleRate * 0.18;
+        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.35));
+        }
+        const noise = this.ctx.createBufferSource();
+        noise.buffer = buffer;
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.setValueAtTime(2400, now);
+        filter.frequency.exponentialRampToValueAtTime(600, now + 0.18);
+        filter.Q.setValueAtTime(3.0, now);
 
-  <!-- Game Bootstrap -->
-  <script src="src/main.js"></script>
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(0.4, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.18);
+
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.ctx.destination);
+        noise.start(now);
+      }
+      playHit(isHeadshot = false) {
+        if (!this.ctx || this.muted) return;
+        const now = this.ctx.currentTime;
+        if (isHeadshot) {
+          const osc1 = this.ctx.createOscillator();
+          const osc2 = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+
+          osc1.type = 'sine';
+          osc1.frequency.setValueAtTime(120, now);
+          osc1.frequency.exponentialRampToValueAtTime(35, now + 0.35);
+
+          osc2.type = 'triangle';
+          osc2.frequency.setValueAtTime(880, now);
+          osc2.frequency.exponentialRampToValueAtTime(520, now + 0.5);
+
+          gain.gain.setValueAtTime(0.8, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+
+          osc1.connect(gain);
+          osc2.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc1.start(now);
+          osc2.start(now);
+          osc1.stop(now + 0.5);
+          osc2.stop(now + 0.5);
+        } else {
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(340, now);
+          osc.frequency.exponentialRampToValueAtTime(80, now + 0.12);
+
+          gain.gain.setValueAtTime(0.35, now);
+          gain.gain.exponentialRampToValueAtTime(0.01, now + 0.12);
+
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.12);
+        }
+      }
+      playDash() {
+        if (!this.ctx || this.muted) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(140, now);
+        osc.frequency.exponentialRampToValueAtTime(360, now + 0.12);
+        osc.frequency.exponentialRampToValueAtTime(90, now + 0.35);
+
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
+
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.35);
+      }
+      playCoin() {
+        if (!this.ctx || this.muted) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(1560, now);
+        osc.frequency.setValueAtTime(2340, now + 0.08);
+
+        gain.gain.setValueAtTime(0.25, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.25);
+      }
+      playDefeat() {
+        if (!this.ctx || this.muted) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(220, now);
+        osc.frequency.exponentialRampToValueAtTime(45, now + 0.8);
+
+        gain.gain.setValueAtTime(0.4, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.8);
+
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.8);
+      }
+    }
+
+    // =========================================================================
+    // 1.5 SPRITE ASSET MANAGER & CHROMA-KEY PROCESSOR
+    // =========================================================================
+    const SpriteAssets = {
+      loaded: false,
+      playerSheet: null,
+      samuraiSheet: null,
+      parallaxBgImg: null,
+      pagodaRoofImg: null,
+      // Exact frame bounding boxes [sx, sy, sw, sh, anchorX, anchorY]
+      // Clamped cleanly above bottom text labels to ensure 100% clean silhouettes
+      playerFrames: [
+        // 0: IDLE stance (strictly isolated with internal crop margins - ZERO bleed from Frame 1)
+        { sx: 120, sy: 215, sw: 495, sh: 740 },
+        // 1: AIMING / WINDUP (isolated, no Frame 0 or Frame 2 bleed)
+        { sx: 680, sy: 145, sw: 465, sh: 810 },
+        // 2: THROW (isolated, arm and weapon clean, no Frame 1 or Frame 3 bleed)
+        { sx: 1205, sy: 190, sw: 550, sh: 765 },
+        // 3: HURT / HIT (impact stagger, no Frame 2 or Frame 4 bleed)
+        { sx: 1760, sy: 190, sw: 445, sh: 768 },
+        // 4: SPRINT / LEAP (running / jumping across rooftops, isolated)
+        { sx: 2210, sy: 195, sw: 485, sh: 760 }
+      ],
+      samuraiFrames: [
+        // 0: IDLE guard (heavy stance)
+        { sx: 10, sy: 160, sw: 720, sh: 775, anchorX: 420, anchorY: 775 },
+        // 1: WINDUP CHARGE (charging throw)
+        { sx: 710, sy: 160, sw: 720, sh: 775, anchorX: 380, anchorY: 775 },
+        // 2: THROW (launching weapon leftward)
+        { sx: 1420, sy: 160, sw: 720, sh: 775, anchorX: 370, anchorY: 775 },
+        // 3: HURT / HIT (armor sparks & stagger / defeat collapse)
+        { sx: 2140, sy: 160, sw: 600, sh: 775, anchorX: 310, anchorY: 775 }
+      ],
+      loadImageCandidates(candidates) {
+        return new Promise((resolve) => {
+          let idx = 0;
+          const tryNext = () => {
+            if (idx >= candidates.length) {
+              resolve(null);
+              return;
+            }
+            const src = candidates[idx++];
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = () => tryNext();
+            img.src = src;
+          };
+          tryNext();
+        });
+      },
+      platformImages: {},
+      getPlatformImage(type) {
+        return this.platformImages[type] || this.platformImages.pagoda || this.pagodaRoofImg;
+      },
+      loadAndProcess(srcCandidates, isPlayer) {
+        return new Promise((resolve) => {
+          let index = 0;
+          const tryNext = () => {
+            if (index >= srcCandidates.length) {
+              resolve(null);
+              return;
+            }
+            const src = srcCandidates[index++];
+            const img = new Image();
+            img.onload = () => {
+              try {
+                const cv = document.createElement('canvas');
+                cv.width = img.width;
+                cv.height = img.height;
+                const ctx = cv.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+
+                const imgData = ctx.getImageData(0, 0, img.width, img.height);
+                const d = imgData.data;
+
+                // Erase bottom text caption area cleanly
+                const textCutY = isPlayer ? 1000 : 960;
+                for (let y = textCutY; y < img.height; y++) {
+                  for (let x = 0; x < img.width; x++) {
+                    d[(y * img.width + x) * 4 + 3] = 0;
+                  }
+                }
+
+                // Chroma-key white & off-white background with edge smoothing
+                for (let i = 0; i < d.length; i += 4) {
+                  if (d[i + 3] === 0) continue;
+                  const r = d[i], g = d[i + 1], b = d[i + 2];
+                  // Strict background elimination: anything near white or light grey
+                  if (r >= 215 && g >= 215 && b >= 215) {
+                    d[i + 3] = 0; // Pure transparent
+                  } else if (r > 175 && g > 175 && b > 175) {
+                    const avg = (r + g + b) / 3;
+                    d[i + 3] = Math.max(0, 255 - (avg - 175) * 6.5);
+                  }
+                }
+                ctx.putImageData(imgData, 0, 0);
+                resolve(cv);
+              } catch (securityErr) {
+                resolve(img);
+              }
+            };
+            img.onerror = () => tryNext();
+            img.src = src;
+          };
+          tryNext();
+        });
+      },
+      init() {
+        const playerPaths = [
+          'assets/character sprite sheet.png',
+          '../assets/character sprite sheet.png',
+          '/assets/character sprite sheet.png'
+        ];
+        const samuraiPaths = [
+          'assets/Samurai sprite sheet.png',
+          '../assets/Samurai sprite sheet.png',
+          '/assets/Samurai sprite sheet.png'
+        ];
+        const bgPaths = [
+          'assets/Parallax-Background.png',
+          '../assets/Parallax-Background.png',
+          '/assets/Parallax-Background.png'
+        ];
+        const roofPaths = [
+          'assets/Pagoda Rooftop.png',
+          '../assets/Pagoda Rooftop.png',
+          '/assets/Pagoda Rooftop.png'
+        ];
+
+        const platPromises = Object.entries(PlatformConfigs).map(([key, cfg]) => {
+          return this.loadImageCandidates(cfg.files).then(img => {
+            if (img) this.platformImages[key] = img;
+            return { key, img };
+          });
+        });
+
+        Promise.all([
+          this.loadAndProcess(playerPaths, true),
+          this.loadAndProcess(samuraiPaths, false),
+          this.loadImageCandidates(bgPaths),
+          this.loadImageCandidates(roofPaths),
+          ...platPromises
+        ]).then(([pCv, sCv, bgImg, roofImg]) => {
+          if (pCv) this.playerSheet = pCv;
+          if (sCv) this.samuraiSheet = sCv;
+          if (bgImg) this.parallaxBgImg = bgImg;
+          if (roofImg) {
+            this.pagodaRoofImg = roofImg;
+            this.platformImages['pagoda'] = roofImg;
+          }
+          this.loaded = true;
+        });
+      }
+    };
+
+    // =========================================================================
+    // 1.5 DYNAMIC PLATFORM CONFIGURATIONS & SPRITE PROFILES
+    // =========================================================================
+    const PlatformConfigs = {
+      pagoda: {
+        name: 'Pagoda Rooftop',
+        assetKey: 'pagoda',
+        files: ['assets/Pagoda Rooftop.png', '../assets/Pagoda Rooftop.png', '/assets/Pagoda Rooftop.png'],
+        sourceW: 1280,
+        sourceH: 720,
+        walkTopSy: 243,
+        visualH: 340,
+        hitboxThickness: 280,
+        leftCapW: 68,
+        rightCapW: 68
+      },
+      rope_bridge: {
+        name: 'Rope Bridge',
+        assetKey: 'rope_bridge',
+        files: ['assets/Rope Bridge.png', 'assets/Broken Rope Bridge.png', '../assets/Rope Bridge.png'],
+        sourceW: 2400,
+        sourceH: 1340,
+        walkTopSy: 480,
+        visualH: 480,
+        hitboxThickness: 35,
+        leftCapW: 85,
+        rightCapW: 85
+      },
+      torii_gate: {
+        name: 'Torii Gate',
+        assetKey: 'torii_gate',
+        files: ['assets/Torii Gate.png', 'assets/Giant Red Torii Gate Top.png', '../assets/Torii Gate.png'],
+        sourceW: 2400,
+        sourceH: 1340,
+        walkTopSy: 560,
+        visualH: 540,
+        hitboxThickness: 50,
+        leftCapW: 90,
+        rightCapW: 90
+      },
+      broken_roof: {
+        name: 'Broken Roof',
+        assetKey: 'broken_roof',
+        files: ['assets/Broken Roof.png', 'assets/Crumbling Old Roof.png', '../assets/Broken Roof.png'],
+        sourceW: 2400,
+        sourceH: 1340,
+        walkTopSy: 450,
+        visualH: 500,
+        hitboxThickness: 48,
+        leftCapW: 75,
+        rightCapW: 75,
+        isTrap: true,
+        trapType: 'broken_roof'
+      },
+      stone_rampart: {
+        name: 'Stone Rampart',
+        assetKey: 'stone_rampart',
+        files: ['assets/Stone Rampart.png', 'assets/Ancient Stone Rampart (Japanese Stone Castle Wall).png', '../assets/Stone Rampart.png'],
+        sourceW: 2400,
+        sourceH: 1340,
+        walkTopSy: 346,
+        visualH: 600,
+        hitboxThickness: 280,
+        leftCapW: 70,
+        rightCapW: 70
+      },
+      sakura_canopy: {
+        name: 'Sakura Canopy',
+        assetKey: 'sakura_canopy',
+        files: ['assets/Sakura Canopy.png', 'assets/Sakura Canopy (The Cherry Blossom Giant Branch).png', '../assets/Sakura Canopy.png'],
+        sourceW: 2400,
+        sourceH: 1340,
+        walkTopSy: 380,
+        visualH: 550,
+        hitboxThickness: 45,
+        leftCapW: 80,
+        rightCapW: 80
+      },
+      spike_pit: {
+        name: 'Spike Pit',
+        assetKey: 'spike_pit',
+        files: ['assets/Spike Pit.png', 'assets/Haunted Bamboo and Spike Pit.png', '../assets/Spike Pit.png'],
+        sourceW: 2400,
+        sourceH: 1340,
+        walkTopSy: 280,
+        visualH: 600,
+        hitboxThickness: 45,
+        leftCapW: 80,
+        rightCapW: 80,
+        isTrap: true,
+        trapType: 'spike_pit',
+        isComposite: true
+      }
+    };
+    SpriteAssets.init();
+
+    // =========================================================================
+    // 1.8 MATTER.JS COLLISION FILTER CATEGORIES
+    // =========================================================================
+    const CollisionCategories = {
+      DEFAULT:           0x0001,
+      GROUND:            0x0002,
+      PLAYER:            0x0004,
+      ENEMY:             0x0008,
+      PLAYER_PROJECTILE: 0x0010,
+      ENEMY_PROJECTILE:  0x0020
+    };
+
+    // =========================================================================
+    // 2. MATTER.JS RAGDOLL SHINOBI CREATURE
+    // =========================================================================
+    class ShinobiRagdoll {
+      constructor(engine, x, y, isPlayer = false, options = {}, game = null) {
+        this.engine = engine;
+        this.world = engine.world;
+        this.isPlayer = isPlayer;
+        this.game = game || window.gameInstance;
+        this.homeX = x;
+        this.homeY = y;
+        this.maxHealth = options.maxHealth || options.maxHp || (isPlayer ? 100 : 80);
+        this.health = options.health !== undefined ? options.health : (options.hp !== undefined ? options.hp : this.maxHealth);
+        this.hp = this.health;
+        this.maxHp = this.maxHealth;
+        this.isArmored = options.isArmored || false;
+        this.isDead = false;
+        this.isRagdoll = false;
+        this.staggerTimer = 0;
+        this.throwAnimTimer = 0;
+        this.throwDuration = 200;
+        this.throwAngle = 0;
+        this.isAiming = false;
+        this.aimPullProgress = 0;
+        this.isWalking = false;
+        this.isJumping = false;
+        this.landingTimer = 0;
+        this.opacity = 1.0;
+        this.isFading = false;
+        this.isDestroyed = false;
+
+        // Platform & Pit Fall State
+        this.assignedPlatform = null;
+        this.isOnFloatingPlatform = false;
+        this.isFallingIntoPit = false;
+        this.fallSpeedY = 0;
+        this.fallSpeedX = 0;
+        this.fallAngle = 0;
+
+        // Physics Bodies & Collision Filtering
+        const group = Matter.Body.nextGroup(true);
+        this.collisionGroup = group;
+
+        // Matter.js collisionFilter categories
+        const colCategory = isPlayer ? CollisionCategories.PLAYER : CollisionCategories.ENEMY;
+        const colMask = isPlayer
+          ? (CollisionCategories.GROUND | CollisionCategories.ENEMY_PROJECTILE)
+          : (CollisionCategories.GROUND | CollisionCategories.PLAYER_PROJECTILE);
+
+        // Head (Dedicated rigid body circle sized to match head/helmet hitbox)
+        const headRadius = isPlayer ? 16 : 22;
+        const headOffsetY = isPlayer ? 32 : 40;
+        this.headRadius = headRadius;
+        this.head = Matter.Bodies.circle(x, y - headOffsetY, headRadius, {
+          collisionFilter: { group: group, category: colCategory, mask: colMask },
+          density: 0.003,
+          friction: 0.8,
+          restitution: 0.05,
+          label: isPlayer ? 'player_head' : 'enemy_head'
+        });
+        this.head.ragdollOwner = this;
+        this.head.isHead = true;
+
+        // Torso
+        this.torso = Matter.Bodies.rectangle(x, y - 5, 22, 36, {
+          collisionFilter: { group: group, category: colCategory, mask: colMask },
+          density: 0.003,
+          friction: 0.8,
+          chamfer: { radius: 5 },
+          label: isPlayer ? 'player_torso' : 'enemy_torso'
+        });
+        this.torso.ragdollOwner = this;
+
+        // Upper Limbs
+        this.leftArm = Matter.Bodies.rectangle(x - 12, y - 10, 8, 22, {
+          collisionFilter: { group: group, category: colCategory, mask: colMask },
+          density: 0.0015,
+          label: isPlayer ? 'player_limb' : 'enemy_limb'
+        });
+        this.leftArm.ragdollOwner = this;
+
+        this.rightArm = Matter.Bodies.rectangle(x + 12, y - 10, 8, 22, {
+          collisionFilter: { group: group, category: colCategory, mask: colMask },
+          density: 0.0015,
+          label: isPlayer ? 'player_limb' : 'enemy_limb'
+        });
+        this.rightArm.ragdollOwner = this;
+
+        // Legs
+        this.leftLeg = Matter.Bodies.rectangle(x - 8, y + 24, 10, 26, {
+          collisionFilter: { group: group, category: colCategory, mask: colMask },
+          density: 0.002,
+          friction: 0.9,
+          label: isPlayer ? 'player_limb' : 'enemy_limb'
+        });
+        this.leftLeg.ragdollOwner = this;
+
+        this.rightLeg = Matter.Bodies.rectangle(x + 8, y + 24, 10, 26, {
+          collisionFilter: { group: group, category: colCategory, mask: colMask },
+          density: 0.002,
+          friction: 0.9,
+          label: isPlayer ? 'player_limb' : 'enemy_limb'
+        });
+        this.rightLeg.ragdollOwner = this;
+
+        // Constraints
+        this.neck = Matter.Constraint.create({
+          bodyA: this.torso,
+          pointA: { x: 0, y: -18 },
+          bodyB: this.head,
+          pointB: { x: 0, y: headRadius - 4 },
+          stiffness: 0.95,
+          damping: 0.1
+        });
+        this.leftShoulder = Matter.Constraint.create({
+          bodyA: this.torso,
+          pointA: { x: -10, y: -12 },
+          bodyB: this.leftArm,
+          pointB: { x: 0, y: -9 },
+          stiffness: 0.85,
+          damping: 0.1
+        });
+        this.rightShoulder = Matter.Constraint.create({
+          bodyA: this.torso,
+          pointA: { x: 10, y: -12 },
+          bodyB: this.rightArm,
+          pointB: { x: 0, y: -9 },
+          stiffness: 0.85,
+          damping: 0.1
+        });
+        this.leftHip = Matter.Constraint.create({
+          bodyA: this.torso,
+          pointA: { x: -6, y: 16 },
+          bodyB: this.leftLeg,
+          pointB: { x: 0, y: -11 },
+          stiffness: 0.88,
+          damping: 0.1
+        });
+        this.rightHip = Matter.Constraint.create({
+          bodyA: this.torso,
+          pointA: { x: 6, y: 16 },
+          bodyB: this.rightLeg,
+          pointB: { x: 0, y: -11 },
+          stiffness: 0.88,
+          damping: 0.1
+        });
+
+        this.constraints = [this.neck, this.leftShoulder, this.rightShoulder, this.leftHip, this.rightHip];
+
+        // Composite container
+        this.composite = Matter.Composite.create();
+        Matter.Composite.add(this.composite, [
+          this.head, this.torso, this.leftArm, this.rightArm, this.leftLeg, this.rightLeg,
+          ...this.constraints
+        ]);
+        Matter.Composite.add(this.world, this.composite);
+      }
+
+      get body() {
+        return this.torso;
+      }
+      set body(v) {
+        this.torso = v;
+      }
+
+      get hp() {
+        return this.health;
+      }
+      set hp(v) {
+        this.health = v;
+      }
+      get maxHp() {
+        return this.maxHealth;
+      }
+      set maxHp(v) {
+        this.maxHealth = v;
+      }
+
+      setPosition(x, y) {
+        const dx = x - this.torso.position.x;
+        const dy = y - this.torso.position.y;
+        this.homeX = x;
+        this.homeY = y;
+
+        const bodies = [this.torso, this.head, this.leftArm, this.rightArm, this.leftLeg, this.rightLeg];
+        for (let b of bodies) {
+          Matter.Body.setPosition(b, {
+            x: b.position.x + dx,
+            y: b.position.y + dy
+          });
+          Matter.Body.setVelocity(b, { x: 0, y: 0 });
+          Matter.Body.setAngularVelocity(b, 0);
+        }
+      }
+
+      triggerThrow(angle) {
+        this.throwAnimTimer = this.throwDuration;
+        this.throwAngle = angle;
+        this.isAiming = false;
+      }
+
+      update(time, delta) {
+        if (this.isDestroyed) return;
+
+        if (this.isDead) {
+          if (this.isFallingIntoPit) {
+            const dt = (delta / 16.66);
+            this.fallSpeedY = (this.fallSpeedY || 2.0) + dt * 0.45;
+            this.torso.position.y += this.fallSpeedY;
+            this.head.position.y += this.fallSpeedY;
+            this.torso.position.x += (this.fallSpeedX || 0);
+            this.head.position.x += (this.fallSpeedX || 0);
+            this.fallAngle = (this.fallAngle || 0) + (this.fallSpeedX >= 0 ? 0.05 : -0.05);
+
+            if (this.torso.position.y > 850) {
+              this.destroy();
+              this.isDestroyed = true;
+            }
+            return;
+          }
+
+          if (this.collapseTimer === undefined) this.collapseTimer = 0;
+          if (this.collapseTimer < 400) {
+            this.collapseTimer += delta;
+          }
+          if (this.isFading) {
+            this.opacity = Math.max(0, (this.opacity !== undefined ? this.opacity : 1.0) - delta / 750);
+          }
+          // Prevent any 360 spinning! Lock angular velocity to 0 and let body settle flat on platform
+          Matter.Body.setAngularVelocity(this.torso, 0);
+          Matter.Body.setAngularVelocity(this.head, 0);
+          return;
+        }
+
+        // Active Upright Stance Controller
+        if (!this.isRagdoll && !this.isDead) {
+          if (this.staggerTimer > 0) {
+            this.staggerTimer -= delta;
+          } else {
+            const isCritical = (this.health / this.maxHealth) < 0.25;
+            let targetTorsoAngle = isCritical ? (this.isPlayer ? 0.28 : -0.28) : 0;
+            let targetHeadAngle = isCritical ? (this.isPlayer ? 0.35 : -0.35) : 0;
+            const breathOffset = isCritical ? Math.sin(Date.now() * 0.008) * 3 : 0;
+
+            if (this.isWalking) {
+              targetTorsoAngle = this.isPlayer ? 0.18 : -0.18;
+              targetHeadAngle = this.isPlayer ? 0.12 : -0.12;
+            } else if (this.isJumping) {
+              targetTorsoAngle = this.isPlayer ? 0.24 : -0.24;
+              targetHeadAngle = this.isPlayer ? 0.18 : -0.18;
+            } else if (this.landingTimer > 0) {
+              this.landingTimer -= delta;
+              targetTorsoAngle = this.isPlayer ? 0.14 : -0.14;
+            }
+
+            // Restorative Upright Angular Torque
+            const angleDiff = targetTorsoAngle - this.torso.angle;
+            Matter.Body.setAngle(this.torso, this.torso.angle + angleDiff * 0.25);
+            Matter.Body.setAngularVelocity(this.torso, this.torso.angularVelocity * 0.5);
+
+            const headDiff = targetHeadAngle - this.head.angle;
+            Matter.Body.setAngle(this.head, this.head.angle + headDiff * 0.25);
+            Matter.Body.setAngularVelocity(this.head, 0);
+
+            // Lock home position to moving floating platform to prevent horizontal/vertical desync
+            if (this.isOnFloatingPlatform && this.assignedPlatform && !this.assignedPlatform.isBroken) {
+              this.homeX = this.assignedPlatform.x + this.assignedPlatform.width * 0.5;
+              this.homeY = this.assignedPlatform.y - 32;
+            }
+
+            // Grounding & Platform Support (when not jumping)
+            if (!this.isJumping) {
+              const targetY = (this.homeY - 6) + breathOffset + (this.landingTimer > 0 ? 6 : 0);
+              const dy = targetY - this.torso.position.y;
+              const dx = this.homeX - this.torso.position.x;
+              Matter.Body.setVelocity(this.torso, {
+                x: this.torso.velocity.x * 0.75 + (this.isWalking ? 0 : dx * 0.12),
+                y: this.torso.velocity.y * 0.75 + dy * 0.12
+              });
+            }
+
+            // Legs Animation
+            if (this.isWalking) {
+              const stride = Math.sin(time * 0.016) * 0.42;
+              Matter.Body.setAngle(this.leftLeg, stride);
+              Matter.Body.setAngle(this.rightLeg, -stride);
+            } else if (this.isJumping) {
+              Matter.Body.setAngle(this.leftLeg, -0.55);
+              Matter.Body.setAngle(this.rightLeg, 0.45);
+            } else {
+              Matter.Body.setAngle(this.leftLeg, 0);
+              Matter.Body.setAngle(this.rightLeg, 0);
+            }
+            Matter.Body.setAngularVelocity(this.leftLeg, 0);
+            Matter.Body.setAngularVelocity(this.rightLeg, 0);
+            Matter.Body.setVelocity(this.leftLeg, { x: 0, y: this.torso.velocity.y });
+            Matter.Body.setVelocity(this.rightLeg, { x: 0, y: this.torso.velocity.y });
+
+            // Arm Pose Control
+            const backArm = this.isPlayer ? this.leftArm : this.rightArm;
+            const throwArm = this.isPlayer ? this.rightArm : this.leftArm;
+
+            // 1. Back Arm: natural resting posture
+            const backArmRestAngle = this.isPlayer ? 0.12 : -0.12;
+            Matter.Body.setAngle(backArm, this.torso.angle + backArmRestAngle);
+            Matter.Body.setAngularVelocity(backArm, 0);
+            Matter.Body.setVelocity(backArm, this.torso.velocity);
+
+            // 2. Throwing Arm: 2-step throw animation
+            if (this.throwAnimTimer > 0) {
+              this.throwAnimTimer -= delta;
+              const t = Math.max(0, this.throwAnimTimer / this.throwDuration);
+              if (t > 0.45) {
+                Matter.Body.setAngle(throwArm, this.throwAngle);
+              } else {
+                const easeT = t / 0.45;
+                const idleArmAngle = this.isPlayer ? -0.15 : 0.15;
+                Matter.Body.setAngle(throwArm, idleArmAngle + (this.throwAngle - idleArmAngle) * easeT);
+              }
+            } else if (this.isAiming) {
+              const pullPct = Math.min(1.0, this.aimPullProgress || 0);
+              const cockAngle = this.isPlayer
+                ? (-0.15 - pullPct * 1.45)
+                : (0.15 + pullPct * 1.45);
+              Matter.Body.setAngle(throwArm, cockAngle);
+            } else {
+              const idleArmAngle = this.isPlayer ? -0.15 : 0.15;
+              Matter.Body.setAngle(throwArm, this.torso.angle + idleArmAngle);
+            }
+            Matter.Body.setAngularVelocity(throwArm, 0);
+            Matter.Body.setVelocity(throwArm, this.torso.velocity);
+          }
+        }
+      }
+
+      applyHit(damage, hitBody, impulseForce = { x: 0, y: 0 }, isHeadshot = false) {
+        if (this.isDead) return { defeated: false, isHeadshot: false };
+        if (isNaN(damage)) damage = 0;
+
+        if (this.isArmored && !isHeadshot && this.health > 40) {
+          damage = Math.floor(damage * 0.5);
+        }
+
+        this.health = Math.max(0, this.health - damage);
+        this.hp = this.health;
+        this.staggerTimer = isHeadshot ? 0 : 300;
+
+        if (hitBody && hitBody.position) {
+          Matter.Body.applyForce(hitBody, hitBody.position, impulseForce);
+        }
+
+        if (isHeadshot || this.health <= 0) {
+          this.health = 0;
+          this.hp = 0;
+          this.triggerRagdollDefeat(impulseForce);
+          return { defeated: true, isHeadshot: isHeadshot };
+        }
+
+        Matter.Body.applyForce(this.torso, this.torso.position, {
+          x: impulseForce.x * 0.65,
+          y: impulseForce.y * 0.65 - 0.015
+        });
+        return { defeated: false, isHeadshot: false };
+      }
+
+      triggerRagdollDefeat(impulse = { x: 0, y: 0 }) {
+        this.isDead = true;
+        this.isRagdoll = true;
+        this.staggerTimer = 0;
+        this.isAiming = false;
+        this.throwAnimTimer = 0;
+        this.collapseTimer = 0;
+        this.opacity = 1.0;
+        this.isFading = false;
+        this.isDestroyed = false;
+
+        // IMMEDIATELY disable all physical collisions so they don't block the player or other projectiles
+        const bodies = [this.head, this.torso, this.leftArm, this.rightArm, this.leftLeg, this.rightLeg];
+        for (let b of bodies) {
+          b.isSensor = true;
+          b.collisionFilter.category = 0;
+          b.collisionFilter.mask = 0;
+        }
+
+        // Release physics constraints so the ragdoll joints loosen / drop flat onto the roof
+        for (let c of this.constraints) {
+          Matter.Composite.remove(this.world, c);
+        }
+        this.constraints = [];
+
+        // No 360 spin! Immediately stop angular velocity and let gravity drop them to the roof
+        Matter.Body.setAngularVelocity(this.torso, 0);
+        Matter.Body.setAngularVelocity(this.head, 0);
+        Matter.Body.setVelocity(this.torso, { x: 0, y: Math.max(0.5, this.torso.velocity.y) });
+        Matter.Body.setVelocity(this.head, { x: 0, y: Math.max(0.5, this.head.velocity.y) });
+
+        // DESTRUCTIBLE FLOATING PLATFORMS (SHATTER ON ENEMY DEATH)
+        if (this.isOnFloatingPlatform && this.assignedPlatform && !this.assignedPlatform.isBroken) {
+          const plat = this.assignedPlatform;
+          plat.isBroken = true;
+          if (plat.body) {
+            Matter.Composite.remove(this.world, plat.body);
+          }
+          const game = this.game || window.gameInstance;
+          if (game && game.particles) {
+            game.particles.spawnPlatformDebris(plat.x, plat.y, plat.width, plat.height);
+          }
+          if (game && game.sounds) {
+            game.sounds.playHit(false);
+          }
+          if (game && game.platforms) {
+            const pIdx = game.platforms.indexOf(plat);
+            if (pIdx !== -1) {
+              game.platforms.splice(pIdx, 1);
+            }
+          }
+          // Dead body falls into pit with the broken debris
+          this.isFallingIntoPit = true;
+          this.fallSpeedY = 2.0;
+          this.fallSpeedX = (Math.random() - 0.5) * 1.5;
+          this.fallAngle = 0;
+        }
+
+        // Set a setTimeout to fade out and completely destroy() the dead body after 2 seconds (if not tumbling into pit)
+        if (!this.isPlayer && !this.isFallingIntoPit) {
+          setTimeout(() => {
+            this.isFading = true;
+          }, 1200);
+
+          setTimeout(() => {
+            this.destroy();
+            this.isDestroyed = true;
+          }, 2000);
+        }
+      }
+
+      render(ctx) {
+        if (this.isDestroyed) return;
+        ctx.save();
+        if (this.isDead && this.opacity !== undefined) {
+          ctx.globalAlpha = Math.max(0, Math.min(1, this.opacity));
+        }
+
+        // 2. FIX IMAGE BLUR: Disable image smoothing to ensure crisp, razor-sharp cartoon outlines
+        ctx.imageSmoothingEnabled = false;
+        ctx.webkitImageSmoothingEnabled = false;
+        if (ctx.mozImageSmoothingEnabled !== undefined) ctx.mozImageSmoothingEnabled = false;
+        if (ctx.msImageSmoothingEnabled !== undefined) ctx.msImageSmoothingEnabled = false;
+
+        if (this.isPlayer) {
+          // ===================================================================
+          // PLAYER SHINOBI: 100% 2D SPRITE SHEET WITH 5-FRAME STATE MACHINE
+          // ZERO PROCEDURAL / STICKMAN SHAPES - INVISIBLE MATTER.JS HITBOXES
+          // ===================================================================
+          const sheet = SpriteAssets.playerSheet;
+          if (sheet) {
+            // 4. ANIMATION STATE MACHINE (5 FRAMES)
+            let frameIndex = 0;
+            if (this.isDead || this.staggerTimer > 0) {
+              frameIndex = 3; // Frame 3 (Hit/Hurt): Taking damage (~300ms) or fallen
+            } else if (this.isJumping || this.isWalking) {
+              frameIndex = 4; // Frame 4 (Leaping/Sprinting): Moving across gap to next platform
+            } else if (this.throwAnimTimer > 0) {
+              frameIndex = 2; // Frame 2 (Throwing): On release (~200ms), then return to Frame 0
+            } else if (this.isAiming) {
+              frameIndex = 1; // Frame 1 (Aiming): While pointer is down and dragging
+            } else {
+              frameIndex = 0; // Frame 0 (Idle): Default resting stance
+            }
+
+            // 3. SPRITE SLICING & ALIGNMENT: Use individual crop margins to eliminate sprite bleeding
+            const frames = SpriteAssets.playerFrames;
+            const frame = (frames && frames[frameIndex]) ? frames[frameIndex] : { sx: 120, sy: 215, sw: 495, sh: 740 };
+
+            const targetHeight = 116; // Character physics height (~110px-120px, strictly locked aspect ratio)
+            const scale = targetHeight / frame.sh;
+            const drawW = frame.sw * scale;
+            const drawH = targetHeight;
+
+            // Root physics body coordinates
+            const posX = this.body.position.x;
+            const posY = this.body.position.y;
+
+            if (this.isDead) {
+              // Defeat pose: collapse backward onto roof and rest flat
+              const t = Math.min(1.0, (this.collapseTimer || 0) / 380);
+              const ease = 1 - Math.cos((t * Math.PI) / 2);
+              const targetFallAngle = -1.48;
+              const currentAngle = targetFallAngle * ease;
+
+              ctx.save();
+              ctx.translate(posX, posY + 26);
+              ctx.rotate(currentAngle);
+              ctx.drawImage(
+                sheet,
+                frame.sx, frame.sy, frame.sw, frame.sh,
+                -drawW / 2, -drawH / 2, drawW, drawH
+              );
+              ctx.restore();
+            } else {
+              // Ground contact shadow when alive and on platform
+              if (!this.isJumping) {
+                ctx.save();
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+                ctx.beginPath();
+                ctx.ellipse(posX, posY + 34, 26, 5.5, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+              }
+
+              ctx.save();
+              const runBob = (this.isWalking && !this.isDead) ? Math.sin(Date.now() * 0.018) * 3.5 : 0;
+              // Centered directly over player's root physics body
+              ctx.translate(posX, posY - 14 + runBob);
+              // BIND MATTER.JS PHYSICS ANGLE DYNAMICALLY TO THE VISUAL SPRITE!
+              ctx.rotate(this.body.angle);
+              ctx.drawImage(
+                sheet,
+                frame.sx, frame.sy, frame.sw, frame.sh,
+                -drawW / 2, -drawH / 2, drawW, drawH
+              );
+              ctx.restore();
+            }
+          }
+        } else {
+          // ===================================================================
+          // ENEMY SAMURAI RENDERING (Faces LEFT toward player)
+          // ===================================================================
+          const sheet = SpriteAssets.samuraiSheet;
+          const frames = SpriteAssets.samuraiFrames;
+          if (sheet && frames) {
+            let frameIndex = 0;
+            if (this.isDead || this.staggerTimer > 0) {
+              frameIndex = 3; // Frame 3: HURT / HIT & ARMOR SPARKS
+            } else if (this.throwAnimTimer > 0) {
+              frameIndex = 2; // Frame 2: THROW
+            } else if (this.isAiming) {
+              frameIndex = 1; // Frame 1: WINDUP CHARGE
+            } else {
+              frameIndex = 0; // Frame 0: IDLE GUARD
+            }
+
+            const frame = frames[frameIndex] || frames[0];
+            const targetH = 126;
+            const scale = targetH / frame.sh;
+            const drawW = frame.sw * scale;
+            const drawH = frame.sh * scale;
+
+            const posX = this.torso.position.x;
+            const footY = this.torso.position.y + 34;
+
+            if (this.isDead) {
+              ctx.save();
+              ctx.translate(posX, footY - 8);
+              ctx.scale(-1, 1); // Enemy mirrored horizontally to face LEFT toward player!
+              if (this.isFallingIntoPit) {
+                ctx.rotate(this.fallAngle || 0.4);
+              } else {
+                const t = Math.min(1.0, (this.collapseTimer || 0) / 380);
+                const ease = 1 - Math.cos((t * Math.PI) / 2);
+                const targetFallAngle = 1.48;
+                const currentAngle = targetFallAngle * ease;
+                ctx.rotate(currentAngle * -1);
+              }
+              ctx.drawImage(sheet, frame.sx, frame.sy, frame.sw, frame.sh, -frame.anchorX * scale, -frame.anchorY * scale, drawW, drawH);
+              ctx.restore();
+            } else {
+              if (!this.isJumping) {
+                ctx.save();
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+                ctx.beginPath();
+                ctx.ellipse(posX, footY + 1, 26, 5.5, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+              }
+
+              ctx.save();
+              ctx.translate(posX, footY);
+              ctx.scale(-1, 1); // Enemy mirrored horizontally to face LEFT toward player at all times!
+              ctx.rotate(this.torso.angle * 0.4 * -1);
+              ctx.drawImage(sheet, frame.sx, frame.sy, frame.sw, frame.sh, -frame.anchorX * scale, -frame.anchorY * scale, drawW, drawH);
+              ctx.restore();
+            }
+          }
+        }
+
+        // Floating Health Bar above alive characters (anchored strictly to torso body position)
+        if (!this.isDead && (this.health < this.maxHealth || !this.isPlayer)) {
+          const hpBarW = 34;
+          const hpBarH = 4;
+          const barX = this.torso.position.x - hpBarW / 2;
+          const barY = this.torso.position.y - 48;
+          const curr = (this.health !== undefined ? this.health : this.hp) || 0;
+          const maxH = (this.maxHealth || this.maxHp || 100);
+          const pct = Math.max(0, Math.min(1, curr / maxH));
+
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+          ctx.fillRect(barX - 1, barY - 1, hpBarW + 2, hpBarH + 2);
+          ctx.fillStyle = this.isPlayer ? '#10b981' : '#f43f5e';
+          ctx.fillRect(barX, barY, hpBarW * pct, hpBarH);
+        }
+
+        ctx.restore();
+      }
+
+      destroy() {
+        const bodies = [this.head, this.torso, this.leftArm, this.rightArm, this.leftLeg, this.rightLeg];
+        for (let c of this.constraints) {
+          Matter.Composite.remove(this.world, c);
+        }
+        for (let b of bodies) {
+          Matter.Composite.remove(this.world, b);
+        }
+        Matter.Composite.remove(this.world, this.composite);
+      }
+    }
+
+    // =========================================================================
+    // 3. SHURIKEN PROJECTILE
+    // =========================================================================
+    class Shuriken {
+      constructor(engine, x, y, vx, vy, isPlayer = true, game = null) {
+        this.engine = engine;
+        this.world = engine.world;
+        this.isPlayer = isPlayer;
+        this.game = game;
+        this.isStuck = false;
+        this.stuckTarget = null;
+        this.stuckOffset = { x: 0, y: 0 };
+        this.stuckAngle = 0;
+        this.trail = [];
+        this.lifeTime = 0;
+        this.radius = 11;
+
+        this.isGroundStuck = false;
+        this.groundStuckTimer = 2500;
+        this.isMarkedForRemoval = false;
+
+        const colCategory = isPlayer ? CollisionCategories.PLAYER_PROJECTILE : CollisionCategories.ENEMY_PROJECTILE;
+        const colMask = isPlayer
+          ? (CollisionCategories.GROUND | CollisionCategories.ENEMY)
+          : (CollisionCategories.GROUND | CollisionCategories.PLAYER);
+
+        this.body = Matter.Bodies.circle(x, y, this.radius, {
+          density: 0.005,
+          friction: 0.2,
+          frictionAir: 0.003,
+          restitution: 0.2,
+          collisionFilter: {
+            category: colCategory,
+            mask: colMask
+          },
+          label: isPlayer ? 'shuriken_player' : 'shuriken_enemy'
+        });
+        this.body.shurikenRef = this;
+
+        Matter.Body.setVelocity(this.body, { x: vx, y: vy });
+        Matter.Body.setAngularVelocity(this.body, (vx >= 0 ? 1 : -1) * 0.42);
+        Matter.Composite.add(this.world, this.body);
+      }
+
+      update(time, delta) {
+        this.lifeTime += delta;
+
+        if (this.isGroundStuck) {
+          this.groundStuckTimer -= delta;
+          if (this.groundStuckTimer <= 0 && !this.isMarkedForRemoval) {
+            this.isMarkedForRemoval = true;
+            if (this.game && this.game.particles) {
+              this.game.particles.spawnDustPuff(this.body.position.x, this.body.position.y, 14);
+            }
+          }
+          return;
+        }
+
+        if (this.isStuck && this.stuckTarget && this.stuckTarget.position) {
+          const cos = Math.cos(this.stuckTarget.angle);
+          const sin = Math.sin(this.stuckTarget.angle);
+          const px = this.stuckTarget.position.x + (this.stuckOffset.x * cos - this.stuckOffset.y * sin);
+          const py = this.stuckTarget.position.y + (this.stuckOffset.x * sin + this.stuckOffset.y * cos);
+          Matter.Body.setPosition(this.body, { x: px, y: py });
+          Matter.Body.setAngle(this.body, this.stuckTarget.angle + this.stuckAngle);
+          return;
+        }
+
+        // Continuous sweep collision check for guaranteed headshot detection across all active enemies
+        if (this.isPlayer && !this.isStuck && !this.isGroundStuck && this.game && this.game.platforms) {
+          for (let plat of this.game.platforms) {
+            if (!plat.enemies) continue;
+            for (let enemy of plat.enemies) {
+              if (enemy.isDead || !enemy.head) continue;
+              const headPos = enemy.head.position;
+              const curPos = this.body.position;
+              const prevPos = this.prevPos || curPos;
+
+              const l2 = (curPos.x - prevPos.x) * (curPos.x - prevPos.x) + (curPos.y - prevPos.y) * (curPos.y - prevPos.y);
+              let distToHead;
+              if (l2 === 0) {
+                distToHead = Math.hypot(headPos.x - curPos.x, headPos.y - curPos.y);
+              } else {
+                let segT = ((headPos.x - prevPos.x) * (curPos.x - prevPos.x) + (headPos.y - prevPos.y) * (curPos.y - prevPos.y)) / l2;
+                segT = Math.max(0, Math.min(1, segT));
+                const nearestX = prevPos.x + segT * (curPos.x - prevPos.x);
+                const nearestY = prevPos.y + segT * (curPos.y - prevPos.y);
+                distToHead = Math.hypot(headPos.x - nearestX, headPos.y - nearestY);
+              }
+
+              if (distToHead <= ((enemy.headRadius || 22) + this.radius + 2)) {
+                this.game.onShurikenHit(this, enemy.head, true);
+                return;
+              }
+            }
+          }
+        }
+        this.prevPos = { x: this.body.position.x, y: this.body.position.y };
+
+        this.trail.push({
+          x: this.body.position.x,
+          y: this.body.position.y,
+          alpha: 1.0
+        });
+        if (this.trail.length > 9) this.trail.shift();
+      }
+
+      stickTo(targetBody) {
+        this.isStuck = true;
+        this.stuckTarget = targetBody;
+        const cos = Math.cos(-targetBody.angle);
+        const sin = Math.sin(-targetBody.angle);
+        const dx = this.body.position.x - targetBody.position.x;
+        const dy = this.body.position.y - targetBody.position.y;
+        this.stuckOffset = {
+          x: dx * cos - dy * sin,
+          y: dx * sin + dy * cos
+        };
+        this.stuckAngle = this.body.angle - targetBody.angle;
+        this.body.isSensor = true;
+        Matter.Body.setVelocity(this.body, { x: 0, y: 0 });
+        Matter.Body.setAngularVelocity(this.body, 0);
+      }
+
+      render(ctx) {
+        let fadeAlpha = 1.0;
+        if (this.isGroundStuck && this.groundStuckTimer < 600) {
+          fadeAlpha = Math.max(0, this.groundStuckTimer / 600);
+        }
+
+        ctx.save();
+        ctx.globalAlpha = fadeAlpha;
+
+        // Glowing motion trail
+        if (this.trail.length > 1 && !this.isStuck) {
+          ctx.save();
+          for (let i = 0; i < this.trail.length - 1; i++) {
+            const p1 = this.trail[i];
+            const p2 = this.trail[i + 1];
+            const pct = i / this.trail.length;
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.strokeStyle = this.isPlayer ? `rgba(255, 42, 77, ${pct * 0.7})` : `rgba(168, 85, 247, ${pct * 0.7})`;
+            ctx.lineWidth = pct * 5.0;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+
+        // Draw 4-point iron shuriken
+        ctx.save();
+        ctx.translate(this.body.position.x, this.body.position.y);
+        ctx.rotate(this.body.angle);
+
+        const r = this.radius;
+        const coreR = r * 0.32;
+
+        ctx.shadowColor = this.isPlayer ? '#ff2a4d' : '#a855f7';
+        ctx.shadowBlur = 10;
+
+        ctx.beginPath();
+        for (let i = 0; i < 4; i++) {
+          const angle = (i * Math.PI) / 2;
+          const midAngle = angle + Math.PI / 4;
+
+          const tipX = Math.cos(angle) * r;
+          const tipY = Math.sin(angle) * r;
+
+          const innerX = Math.cos(midAngle) * coreR;
+          const innerY = Math.sin(midAngle) * coreR;
+
+          if (i === 0) ctx.moveTo(tipX, tipY);
+          else ctx.lineTo(tipX, tipY);
+          ctx.lineTo(innerX, innerY);
+        }
+        ctx.closePath();
+
+        ctx.fillStyle = '#1e1b29';
+        ctx.fill();
+
+        ctx.strokeStyle = this.isPlayer ? '#ff2a4d' : '#c084fc';
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(0, 0, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#fbbf24';
+        ctx.fill();
+
+        ctx.restore();
+        ctx.restore();
+      }
+
+      destroy() {
+        Matter.Composite.remove(this.world, this.body);
+      }
+    }
+
+    // =========================================================================
+    // 4. DYNAMIC PLATFORMS & INTERACTIVE HAZARDS
+    // =========================================================================
+    class RooftopPlatform {
+      constructor(engine, x, y, width, height, options = {}) {
+        this.engine = engine;
+        this.world = engine.world;
+        this.x = x;
+        this.y = y; // y is strictly the flat top walk edge
+        this.width = width;
+        this.height = height;
+        this.isFloating = options.isFloating || false;
+        this.platformType = options.platformType || (this.isFloating ? 'pagoda' : 'pagoda');
+        this.config = PlatformConfigs[this.platformType] || PlatformConfigs.pagoda;
+        this.isTrap = this.config.isTrap || false;
+        this.isBroken = false;
+        this.isTriggered = false;
+        this.isCrumbling = false;
+        this.isCollapsing = false;
+        this.groundPlatform = options.groundPlatform || null;
+        this.offsetXFromGround = this.groundPlatform ? (this.x - this.groundPlatform.x) : 0;
+        this.enemies = []; // Persistent enemies stationed on this platform
+
+        // Dynamic Physics Hitboxes:
+        // Do not use hardcoded width/height. Dynamically adjust physics body dimensions
+        // based on the specific sprite chosen so characters land on the top visual edge.
+        if (this.config.isComposite && this.config.trapType === 'spike_pit') {
+          // SPIKE PIT COMPOSITE BODY: Two solid side ledges with gap in middle
+          const ledgeW = width * 0.35;
+          const ledgeH = this.config.hitboxThickness || 45;
+
+          const leftLedge = Matter.Bodies.rectangle(x + ledgeW / 2, y + ledgeH / 2, ledgeW, ledgeH, {
+            isStatic: true,
+            friction: 0.9,
+            label: 'platform',
+            collisionFilter: {
+              category: CollisionCategories.GROUND,
+              mask: CollisionCategories.PLAYER | CollisionCategories.ENEMY | CollisionCategories.PLAYER_PROJECTILE | CollisionCategories.ENEMY_PROJECTILE
+            }
+          });
+          leftLedge.platformOwner = this;
+
+          const rightLedge = Matter.Bodies.rectangle(x + width - ledgeW / 2, y + ledgeH / 2, ledgeW, ledgeH, {
+            isStatic: true,
+            friction: 0.9,
+            label: 'platform',
+            collisionFilter: {
+              category: CollisionCategories.GROUND,
+              mask: CollisionCategories.PLAYER | CollisionCategories.ENEMY | CollisionCategories.PLAYER_PROJECTILE | CollisionCategories.ENEMY_PROJECTILE
+            }
+          });
+          rightLedge.platformOwner = this;
+
+          this.bodies = [leftLedge, rightLedge];
+          this.body = leftLedge; // primary reference
+          Matter.Composite.add(this.world, this.bodies);
+        } else {
+          const bodyH = this.config.hitboxThickness || height;
+          this.body = Matter.Bodies.rectangle(x + width / 2, y + bodyH / 2, width, bodyH, {
+            isStatic: true,
+            friction: 0.9,
+            label: 'platform',
+            collisionFilter: {
+              category: CollisionCategories.GROUND,
+              mask: CollisionCategories.PLAYER | CollisionCategories.ENEMY | CollisionCategories.PLAYER_PROJECTILE | CollisionCategories.ENEMY_PROJECTILE
+            }
+          });
+          this.body.platformOwner = this;
+          this.bodies = [this.body];
+          Matter.Composite.add(this.world, this.body);
+        }
+
+        this.lanterns = [];
+        if (!this.isFloating && width > 160 && this.platformType !== 'rope_bridge') {
+          this.lanterns.push({
+            x: x + 24,
+            y: y + 8,
+            swingAngle: Math.random() * Math.PI
+          });
+          this.lanterns.push({
+            x: x + width - 24,
+            y: y + 8,
+            swingAngle: Math.random() * Math.PI + 1
+          });
+        }
+      }
+
+      triggerBrokenRoofTrap(game) {
+        if (this.isTriggered || this.isBroken) return;
+        this.isTriggered = true;
+        this.isCrumbling = true;
+
+        if (game && game.particles) {
+          game.particles.spawnDustPuff(this.x + this.width / 2, this.y, 18);
+        }
+        if (game && game.sounds) {
+          game.sounds.playHit(false);
+        }
+        if (game) {
+          game.addPopup(this.x + this.width / 2, this.y - 30, 'ROOF CRUMBLING!', '#f59e0b', true);
+        }
+
+        // Start 2-second setTimeout: disable static physics so it falls off screen
+        setTimeout(() => {
+          this.isCollapsing = true;
+          this.isCrumbling = false;
+          if (game && game.particles) {
+            game.particles.spawnPlatformDebris(this.x, this.y, this.width, this.height);
+          }
+          for (let b of (this.bodies || [this.body])) {
+            if (b) {
+              Matter.Body.setStatic(b, false);
+              Matter.Body.setVelocity(b, { x: 0, y: 3.5 });
+            }
+          }
+        }, 2000);
+      }
+
+      update(delta) {
+        if (this.isBroken) return;
+
+        if (this.isCollapsing) {
+          if (this.body) {
+            this.y = this.body.position.y - (this.config.hitboxThickness || 40) / 2;
+          } else {
+            this.y += 4;
+          }
+          if (this.y > 850) {
+            this.destroy();
+            this.isBroken = true;
+          }
+        }
+
+        // Fix X-Axis Scroll: Floating platform physics body moves at exact same horizontal velocity
+        if (this.isFloating && this.groundPlatform && !this.isBroken) {
+          const groundVx = this.groundPlatform.body ? this.groundPlatform.body.velocity.x : 0;
+          if (this.body && Math.abs(groundVx) > 0.001) {
+            Matter.Body.setVelocity(this.body, { x: groundVx, y: this.body.velocity.y });
+          }
+          const targetX = this.groundPlatform.x + this.offsetXFromGround;
+          if (Math.abs(targetX - this.x) > 0.05) {
+            this.x = targetX;
+            if (this.body) {
+              Matter.Body.setPosition(this.body, {
+                x: this.x + this.width / 2,
+                y: this.body.position.y
+              });
+            }
+          }
+        }
+      }
+
+      render(ctx) {
+        if (this.isBroken) return;
+        ctx.save();
+        let x = this.x;
+        let y = this.y;
+        const w = this.width;
+        const h = this.height;
+
+        // Jitter while crumbling before collapse
+        if (this.isCrumbling && !this.isCollapsing) {
+          x += (Math.random() - 0.5) * 2.5;
+          y += (Math.random() - 0.5) * 2.0;
+        }
+
+        if (this.isFloating) {
+          // Floating platform rendering (compact roof/wooden beam)
+          const roofImg = SpriteAssets.getPlatformImage('pagoda') || SpriteAssets.pagodaRoofImg;
+          if (roofImg && roofImg.complete && roofImg.naturalWidth > 0) {
+            const capW = 26;
+            ctx.drawImage(roofImg, 35, 230, 245, 175, x - capW, y - 4, capW + 4, 38);
+            ctx.drawImage(roofImg, 280, 243, 720, 160, x, y, w, 36);
+            ctx.drawImage(roofImg, 1000, 230, 245, 175, x + w - 4, y - 4, capW + 4, 38);
+          } else {
+            ctx.fillStyle = '#1e1022';
+            ctx.fillRect(x, y, w, 18);
+            ctx.strokeStyle = '#ff2a4d';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x, y, w, 18);
+          }
+
+          ctx.fillStyle = '#0a0812';
+          ctx.fillRect(x + 8, y + 26, w - 16, 10);
+          ctx.strokeStyle = '#382218';
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(x + 8, y + 26, w - 16, 10);
+
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+          ctx.beginPath();
+          ctx.ellipse(x + w / 2, y + 38, w * 0.42, 6, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+          return;
+        }
+
+        const cfg = this.config || PlatformConfigs.pagoda;
+        const img = SpriteAssets.getPlatformImage(this.platformType);
+
+        if (img && img.complete && img.naturalWidth > 0) {
+          const drawH = Math.min(cfg.visualH || 340, Math.max(160, h));
+          const capW = cfg.leftCapW || 70;
+          const sy = cfg.walkTopSy || 243;
+          const sH = Math.min(img.naturalHeight - sy, 420);
+
+          // 3-slice rendering
+          const sliceEdgeW = Math.min(260, Math.floor(img.naturalWidth * 0.18));
+          const centerW = img.naturalWidth - sliceEdgeW * 2;
+
+          // Left decorative cap/curve
+          ctx.drawImage(img, 0, sy - 14, sliceEdgeW, sH, x - capW, y - 4, capW + 8, drawH);
+          // Center walking surface
+          ctx.drawImage(img, sliceEdgeW, sy, centerW, sH, x, y - 2, w, drawH);
+          // Right decorative cap/curve
+          ctx.drawImage(img, img.naturalWidth - sliceEdgeW, sy - 14, sliceEdgeW, sH, x + w - 8, y - 4, capW + 8, drawH);
+
+          // Base silhouette under solid buildings/platforms
+          if (h > drawH - 12 && this.platformType !== 'spike_pit' && this.platformType !== 'rope_bridge') {
+            ctx.fillStyle = '#08060c';
+            ctx.fillRect(x - 5, y + drawH - 12, w + 10, h - drawH + 24);
+          }
+        } else {
+          // Robust stylized fallback matching theme
+          ctx.fillStyle = '#0e0e14';
+          ctx.fillRect(x, y, w, h);
+          ctx.strokeStyle = '#ff2a4d';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x, y, w, h);
+        }
+
+        // Atmospheric lanterns on solid ground platforms
+        if (!this.isFloating && this.platformType !== 'rope_bridge' && this.lanterns) {
+          const now = Date.now() * 0.003;
+          for (let l of this.lanterns) {
+            const swing = Math.sin(now + l.swingAngle) * 0.12;
+            ctx.save();
+            ctx.translate(l.x, l.y);
+            ctx.rotate(swing);
+            ctx.strokeStyle = '#374151';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(0, 0); ctx.lineTo(0, 16);
+            ctx.stroke();
+
+            ctx.shadowColor = '#f59e0b';
+            ctx.shadowBlur = 14;
+            ctx.fillStyle = '#f59e0b';
+            ctx.fillRect(-7, 16, 14, 20);
+
+            ctx.fillStyle = '#78350f';
+            ctx.fillRect(-8, 14, 16, 3);
+            ctx.fillRect(-8, 35, 16, 3);
+
+            ctx.fillStyle = '#451a03';
+            ctx.fillRect(-3, 22, 6, 8);
+            ctx.restore();
+          }
+        }
+
+        ctx.restore();
+      }
+
+      destroy() {
+        if (this.bodies) {
+          for (let b of this.bodies) {
+            Matter.Composite.remove(this.world, b);
+          }
+        } else if (this.body) {
+          Matter.Composite.remove(this.world, this.body);
+        }
+      }
+    }
+
+    // =========================================================================
+    // 5. ATMOSPHERIC & COMBAT PARTICLE SYSTEMS
+    // =========================================================================
+    class ParticleManager {
+      constructor(canvasWidth, canvasHeight) {
+        this.width = canvasWidth;
+        this.height = canvasHeight;
+        this.petals = [];
+        this.sparks = [];
+        this.dustPuffs = [];
+        this.healSparkles = [];
+        this.bloodDroplets = [];
+        this.bloodSplats = [];
+        this.debris = [];
+
+        for (let i = 0; i < 45; i++) {
+          this.petals.push({
+            x: Math.random() * canvasWidth,
+            y: Math.random() * canvasHeight,
+            speedX: -0.8 - Math.random() * 1.4,
+            speedY: 0.6 + Math.random() * 1.0,
+            angle: Math.random() * Math.PI * 2,
+            rotSpeed: (Math.random() - 0.5) * 0.04,
+            size: 5 + Math.random() * 4,
+            opacity: 0.4 + Math.random() * 0.5
+          });
+        }
+      }
+
+      resize(w, h) {
+        this.width = w;
+        this.height = h;
+      }
+
+      spawnBlood(x, y, vx, vy, hpPct, isFatalOrHeadshot) {
+        let count;
+        if (isFatalOrHeadshot) {
+          count = 28 + Math.floor(Math.random() * 14);
+        } else if (hpPct < 0.30) {
+          count = 18 + Math.floor(Math.random() * 9);
+        } else {
+          count = 6 + Math.floor(Math.random() * 4);
+        }
+
+        const baseAngle = Math.atan2(vy, vx);
+        const bloodColors = ['#e11d48', '#be123c', '#9f1239', '#881337', '#b91c1c'];
+
+        for (let i = 0; i < count; i++) {
+          const spread = (Math.random() - 0.5) * 1.5;
+          const angle = baseAngle + spread;
+          const speed = 1.8 + Math.random() * (isFatalOrHeadshot ? 8.5 : 5.5);
+
+          this.bloodDroplets.push({
+            x: x,
+            y: y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed - (1.2 + Math.random() * 2.2),
+            radius: 1.4 + Math.random() * (isFatalOrHeadshot ? 2.4 : 1.6),
+            color: bloodColors[Math.floor(Math.random() * bloodColors.length)],
+            alpha: 1.0,
+            decay: 0.012 + Math.random() * 0.008
+          });
+        }
+      }
+
+      spawnImpactSparks(x, y, count = 16, isCrit = false) {
+        for (let i = 0; i < count; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 2 + Math.random() * (isCrit ? 9 : 6);
+          this.sparks.push({
+            x: x,
+            y: y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed - 1.5,
+            color: isCrit ? '#fbbf24' : '#ff2a4d',
+            size: isCrit ? 3.5 : 2.5,
+            alpha: 1.0,
+            decay: 0.025 + Math.random() * 0.035
+          });
+        }
+      }
+
+      spawnDustPuff(x, y, count = 12) {
+        for (let i = 0; i < count; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 0.5 + Math.random() * 1.8;
+          this.dustPuffs.push({
+            x: x + (Math.random() * 8 - 4),
+            y: y + (Math.random() * 6 - 3),
+            vx: Math.cos(angle) * speed,
+            vy: -0.6 - Math.random() * 1.2,
+            radius: 4 + Math.random() * 6,
+            maxRadius: 12 + Math.random() * 8,
+            alpha: 0.75,
+            decay: 0.02 + Math.random() * 0.015,
+            color: Math.random() > 0.5 ? 'rgba(148, 163, 184, ' : 'rgba(100, 116, 139, '
+          });
+        }
+      }
+
+      spawnHealingSparkles(x, y) {
+        for (let i = 0; i < 3; i++) {
+          this.healSparkles.push({
+            x: x + (Math.random() * 26 - 13),
+            y: y + (Math.random() * 20 - 10),
+            vy: -1.2 - Math.random() * 0.8,
+            radius: 2.5 + Math.random() * 2,
+            alpha: 0.9,
+            decay: 0.03
+          });
+        }
+      }
+
+      spawnPlatformDebris(x, y, w, h) {
+        // Spawn 5-6 small wood/debris rectangles and let Matter.js-like gravity pull them down off screen
+        const count = 6;
+        const colors = ['#1f1524', '#2e1f2b', '#78350f', '#991b1b', '#1e1b29', '#3a241b'];
+        for (let i = 0; i < count; i++) {
+          const pieceW = 16 + Math.random() * 18;
+          const pieceH = 7 + Math.random() * 9;
+          this.debris.push({
+            x: x + (i / count) * w + (Math.random() * 10 - 5),
+            y: y + Math.random() * 8,
+            w: pieceW,
+            h: pieceH,
+            vx: (Math.random() - 0.5) * 5.0,
+            vy: -1.8 - Math.random() * 3.0,
+            rot: Math.random() * Math.PI * 2,
+            vRot: (Math.random() - 0.5) * 0.22,
+            color: colors[i % colors.length]
+          });
+        }
+      }
+
+      update(platforms = []) {
+        for (let p of this.petals) {
+          p.x += p.speedX + Math.sin(Date.now() * 0.002 + p.y * 0.01) * 0.5;
+          p.y += p.speedY;
+          p.angle += p.rotSpeed;
+          if (p.x < -20) p.x = this.width + 20;
+          if (p.y > this.height + 20) {
+            p.y = -20;
+            p.x = Math.random() * this.width;
+          }
+        }
+        for (let i = this.sparks.length - 1; i >= 0; i--) {
+          const s = this.sparks[i];
+          s.x += s.vx;
+          s.y += s.vy;
+          s.vy += 0.15;
+          s.alpha -= s.decay;
+          if (s.alpha <= 0) {
+            this.sparks.splice(i, 1);
+          }
+        }
+        for (let i = this.dustPuffs.length - 1; i >= 0; i--) {
+          const d = this.dustPuffs[i];
+          d.x += d.vx;
+          d.y += d.vy;
+          d.radius += 0.35;
+          d.alpha -= d.decay;
+          if (d.alpha <= 0) {
+            this.dustPuffs.splice(i, 1);
+          }
+        }
+        for (let i = this.healSparkles.length - 1; i >= 0; i--) {
+          const h = this.healSparkles[i];
+          h.y += h.vy;
+          h.alpha -= h.decay;
+          if (h.alpha <= 0) {
+            this.healSparkles.splice(i, 1);
+          }
+        }
+        for (let i = this.bloodDroplets.length - 1; i >= 0; i--) {
+          const b = this.bloodDroplets[i];
+          b.x += b.vx;
+          b.y += b.vy;
+          b.vy += 0.28;
+          b.vx *= 0.98;
+
+          let splatted = false;
+          if (b.vy > 0 && b.y >= 528 && b.y <= 550) {
+            this.bloodSplats.push({
+              x: b.x,
+              y: 530 + (Math.random() * 2),
+              rx: b.radius * (1.8 + Math.random() * 1.4),
+              ry: b.radius * (0.6 + Math.random() * 0.4),
+              color: b.color,
+              alpha: 0.85,
+              decay: 0.0022
+            });
+            splatted = true;
+          } else if (platforms && b.vy > 0) {
+            for (let p of platforms) {
+              if (b.x >= p.x - 5 && b.x <= p.x + p.width + 5 && b.y >= p.y - 4 && b.y <= p.y + 16) {
+                this.bloodSplats.push({
+                  x: b.x,
+                  y: p.y + (Math.random() * 2),
+                  rx: b.radius * (1.8 + Math.random() * 1.4),
+                  ry: b.radius * (0.6 + Math.random() * 0.4),
+                  color: b.color,
+                  alpha: 0.85,
+                  decay: 0.0022
+                });
+                splatted = true;
+                break;
+              }
+            }
+          }
+
+          if (splatted || b.y > 850) {
+            this.bloodDroplets.splice(i, 1);
+          }
+        }
+        for (let i = this.bloodSplats.length - 1; i >= 0; i--) {
+          const s = this.bloodSplats[i];
+          s.alpha -= s.decay;
+          if (s.alpha <= 0) {
+            this.bloodSplats.splice(i, 1);
+          }
+        }
+        for (let i = this.debris.length - 1; i >= 0; i--) {
+          const deb = this.debris[i];
+          deb.x += deb.vx;
+          deb.y += deb.vy;
+          deb.vy += 0.38; // Gravity pulling debris down off screen
+          deb.rot += deb.vRot;
+          if (deb.y > 850) {
+            this.debris.splice(i, 1);
+          }
+        }
+      }
+
+      renderWorld(ctx) {
+        // Falling wooden platform debris
+        for (let deb of this.debris) {
+          ctx.save();
+          ctx.translate(deb.x, deb.y);
+          ctx.rotate(deb.rot);
+          ctx.fillStyle = deb.color;
+          ctx.strokeStyle = '#09080e';
+          ctx.lineWidth = 1.2;
+          ctx.fillRect(-deb.w / 2, -deb.h / 2, deb.w, deb.h);
+          ctx.strokeRect(-deb.w / 2, -deb.h / 2, deb.w, deb.h);
+          ctx.restore();
+        }
+        for (let s of this.bloodSplats) {
+          ctx.save();
+          ctx.globalAlpha = Math.max(0, s.alpha);
+          ctx.fillStyle = s.color;
+          ctx.beginPath();
+          ctx.ellipse(s.x, s.y, s.rx, s.ry, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        for (let b of this.bloodDroplets) {
+          ctx.save();
+          ctx.globalAlpha = Math.max(0, b.alpha);
+          ctx.fillStyle = b.color;
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        for (let s of this.sparks) {
+          ctx.save();
+          ctx.fillStyle = s.color;
+          ctx.globalAlpha = Math.max(0, s.alpha);
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        for (let d of this.dustPuffs) {
+          ctx.save();
+          ctx.fillStyle = d.color + Math.max(0, d.alpha) + ')';
+          ctx.beginPath();
+          ctx.arc(d.x, d.y, d.radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        for (let h of this.healSparkles) {
+          ctx.save();
+          ctx.fillStyle = '#22c55e';
+          ctx.shadowColor = '#4ade80';
+          ctx.shadowBlur = 8;
+          ctx.globalAlpha = Math.max(0, h.alpha);
+          ctx.beginPath();
+          ctx.arc(h.x, h.y, h.radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+
+      renderScreen(ctx) {
+        ctx.save();
+        for (let p of this.petals) {
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.angle);
+          ctx.fillStyle = `rgba(255, 138, 174, ${p.opacity})`;
+          ctx.beginPath();
+          ctx.ellipse(0, 0, p.size, p.size * 0.55, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        ctx.restore();
+      }
+
+      render(ctx) {
+        this.renderScreen(ctx);
+      }
+    }
+
+    // =========================================================================
+    // 6. MAIN GAME CONTROLLER & SCENE MANAGEMENT
+    // =========================================================================
+    class ShadowShurikenGame {
+      constructor() {
+        window.gameInstance = this;
+        this.canvas = document.getElementById('game-canvas');
+        this.ctx = this.canvas.getContext('2d');
+
+        this.virtualW = 1280;
+        this.virtualH = 720;
+        this.scaleRatio = 1;
+        this.offsetX = 0;
+        this.offsetY = 0;
+
+        // Sound System
+        this.sounds = new SoundEngine();
+
+        // Game State Machine: 'START' | 'RUNNING' | 'COMBAT' | 'GAME_OVER'
+        this.gameState = 'START';
+
+        // Continuous Ground & Scrolling
+        this.groundY = 530;
+        this.scrollSpeed = 5.5;
+        this.bgScrollX = 0;
+        this.groundTiles = [];
+
+        // Progression Tracking
+        this.distanceMeters = 0;
+        this.bestDistance = parseInt(localStorage.getItem('rooftop_shinobi_best') || '0', 10);
+        this.goldCoins = 0;
+        this.kills = 0;
+        this.headshots = 0;
+
+        // Stamina & Passive Healing
+        this.playerStamina = 100;
+        this.maxStamina = 100;
+        this.timeSinceLastDamage = 9999;
+
+        // Aiming & Drag Input
+        this.isAiming = false;
+        this.pointerStart = { x: 0, y: 0 };
+        this.pointerCurrent = { x: 0, y: 0 };
+        this.maxPullDistance = 140;
+
+        // Combat & Wave Transition
+        this.player = null;
+        this.currentEnemy = null;
+        this.enemies = [];
+        this.projectiles = [];
+        this.popups = [];
+        this.waveTransitionTimer = null;
+        this.runDistanceProgress = 0;
+        this.runTargetDistance = 180;
+
+        // Particles
+        this.particles = new ParticleManager(this.virtualW, this.virtualH);
+
+        // Physics
+        this.initPhysics();
+        this.initGroundTiles();
+
+        // Bind Events
+        this.setupEvents();
+        this.resize();
+
+        // Check URL preview param
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('play') === '1' || urlParams.get('preview') === '1') {
+          this.startNewGame();
+        }
+
+        // Start Loop
+        this.lastTime = performance.now();
+        requestAnimationFrame((t) => this.gameLoop(t));
+      }
+
+      initPhysics() {
+        this.engine = Matter.Engine.create({
+          enableSleeping: false
+        });
+        this.engine.gravity.y = 1.05;
+
+        // Continuous flat solid ground body spanning the entire screen
+        this.groundBody = Matter.Bodies.rectangle(
+          this.virtualW / 2,
+          this.groundY + 80,
+          this.virtualW * 4,
+          160,
+          {
+            isStatic: true,
+            label: 'platform',
+            friction: 0.8,
+            restitution: 0.02
+          }
+        );
+        Matter.World.add(this.engine.world, this.groundBody);
+
+        Matter.Events.on(this.engine, 'collisionStart', (e) => this.handleCollisions(e));
+      }
+
+      initGroundTiles() {
+        const tileW = 380;
+        const platformPool = ['pagoda', 'rope_bridge', 'torii_gate', 'broken_roof', 'stone_rampart', 'sakura_canopy', 'spike_pit'];
+        this.groundTiles = [];
+        for (let i = 0; i < 5; i++) {
+          const type = platformPool[i % platformPool.length];
+          this.groundTiles.push({
+            x: -80 + i * tileW,
+            y: this.groundY,
+            width: tileW,
+            height: 240,
+            type: type
+          });
+        }
+      }
+
+      getAimLaunchVector() {
+        if (!this.player || this.player.isDead) return null;
+        const dx = this.pointerStart.x - this.pointerCurrent.x;
+        const dy = this.pointerStart.y - this.pointerCurrent.y;
+        const pullDist = Math.sqrt(dx * dx + dy * dy);
+        if (pullDist < 12) return null;
+
+        const pullClamped = Math.min(pullDist, this.maxPullDistance);
+        const baseAngle = Math.atan2(dy, dx);
+
+        let fatiguePowerScale = 1.0;
+        let fatigueWobbleAngle = 0;
+        if (this.playerStamina < 25) {
+          const fatPct = (25 - this.playerStamina) / 25;
+          fatiguePowerScale = 1.0 - fatPct * 0.35;
+          fatigueWobbleAngle = Math.sin(Date.now() * 0.035) * fatPct * 0.10;
+        }
+
+        const angle = baseAngle + fatigueWobbleAngle;
+        const power = pullClamped * 0.22 * fatiguePowerScale;
+
+        const vx = Math.cos(angle) * power;
+        const vy = Math.sin(angle) * power;
+
+        const startX = this.player.torso.position.x + 18;
+        const startY = this.player.torso.position.y - 12;
+
+        return { startX, startY, vx, vy, pullDist, fatiguePowerScale };
+      }
+
+      setupEvents() {
+        window.addEventListener('resize', () => this.resize());
+
+        const onDown = (e) => {
+          this.sounds.init();
+          const pos = this.getCanvasPointerPos(e);
+
+          if (this.gameState === 'START') {
+            this.startNewGame();
+            return;
+          }
+
+          if (this.gameState === 'GAME_OVER') {
+            const btnW = 220, btnH = 55;
+            const btnX = this.virtualW / 2 - btnW / 2;
+            const btnY = this.virtualH / 2 + 85;
+            if (pos.x >= btnX && pos.x <= btnX + btnW && pos.y >= btnY && pos.y <= btnY + btnH) {
+              this.startNewGame();
+            }
+            return;
+          }
+
+          // STRICT CONDITION: During RUNNING state or wave transition, aiming is COMPLETELY DISABLED!
+          if (this.gameState !== 'COMBAT' || this.waveTransitionTimer) return;
+
+          if (this.player && !this.player.isDead) {
+            this.isAiming = true;
+            this.pointerStart = { x: pos.x, y: pos.y };
+            this.pointerCurrent = { x: pos.x, y: pos.y };
+            this.player.isAiming = true;
+            this.player.aimPullProgress = 0;
+            this.player.aimAngle = 0;
+          }
+        };
+
+        const onMove = (e) => {
+          if (this.gameState !== 'COMBAT' || !this.isAiming || this.waveTransitionTimer) return;
+          this.pointerCurrent = this.getCanvasPointerPos(e);
+          if (this.player && !this.player.isDead) {
+            const dx = this.pointerStart.x - this.pointerCurrent.x;
+            const dy = this.pointerStart.y - this.pointerCurrent.y;
+            const pullDist = Math.sqrt(dx * dx + dy * dy);
+            this.player.isAiming = true;
+            this.player.aimPullProgress = Math.min(1.0, pullDist / this.maxPullDistance);
+            this.player.aimAngle = Math.atan2(dy, dx);
+          }
+        };
+
+        const onUp = (e) => {
+          if (!this.isAiming) return;
+          this.isAiming = false;
+          if (this.player) {
+            this.player.isAiming = false;
+          }
+
+          if (this.gameState !== 'COMBAT' || this.waveTransitionTimer) return;
+
+          const aim = this.getAimLaunchVector();
+          if (aim && this.player && !this.player.isDead) {
+            const shuriken = new Shuriken(this.engine, aim.startX, aim.startY, aim.vx, aim.vy, true, this);
+            this.projectiles.push(shuriken);
+            this.sounds.playThrow();
+
+            const launchAngle = Math.atan2(aim.vy, aim.vx);
+            this.player.triggerThrow(launchAngle);
+
+            this.playerStamina = Math.max(0, this.playerStamina - 28);
+          }
+        };
+
+        this.canvas.addEventListener('pointerdown', onDown);
+        this.canvas.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onUp);
+      }
+
+      getCanvasPointerPos(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        const clientX = e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+        const clientY = e.clientY !== undefined ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
+
+        const x = (clientX - rect.left - this.offsetX) / this.scaleRatio;
+        const y = (clientY - rect.top - this.offsetY) / this.scaleRatio;
+        return { x, y };
+      }
+
+      resize() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        this.canvas.width = w;
+        this.canvas.height = h;
+
+        const targetRatio = this.virtualW / this.virtualH;
+        const currentRatio = w / h;
+
+        if (currentRatio > targetRatio) {
+          this.scaleRatio = h / this.virtualH;
+          this.offsetX = (w - this.virtualW * this.scaleRatio) / 2;
+          this.offsetY = 0;
+        } else {
+          this.scaleRatio = w / this.virtualW;
+          this.offsetX = 0;
+          this.offsetY = (h - this.virtualH * this.scaleRatio) / 2;
+        }
+
+        if (this.particles) {
+          this.particles.resize(this.virtualW, this.virtualH);
+        }
+      }
+
+      startNewGame() {
+        if (this.player) this.player.destroy();
+        if (this.currentEnemy) this.currentEnemy.destroy();
+        for (let s of this.projectiles) s.destroy();
+
+        if (this.waveTransitionTimer) {
+          clearTimeout(this.waveTransitionTimer);
+          this.waveTransitionTimer = null;
+        }
+
+        this.player = null;
+        this.currentEnemy = null;
+        this.enemies = [];
+        this.projectiles = [];
+        this.popups = [];
+
+        this.playerStamina = 100;
+        this.maxStamina = 100;
+        this.timeSinceLastDamage = 9999;
+        this.distanceMeters = 0;
+        this.goldCoins = 0;
+        this.kills = 0;
+        this.headshots = 0;
+        this.isAiming = false;
+
+        this.initGroundTiles();
+
+        // Spawn Player firmly on continuous ground
+        const playerX = 220;
+        const playerY = this.groundY - 32;
+        this.player = new ShinobiRagdoll(this.engine, playerX, playerY, true, { health: 100 }, this);
+        this.player.isWalking = true;
+
+        // Initial Running Phase
+        this.gameState = 'RUNNING';
+        this.runDistanceProgress = 0;
+        this.runTargetDistance = 160;
+      }
+
+      spawnDuelEnemy() {
+        // 1. Calculate difficulty scaling based on distance meters
+        const isArmored = this.distanceMeters >= 150 && Math.random() < 0.45;
+        const enemyHealth = 70 + Math.min(60, Math.floor(this.distanceMeters / 100) * 15);
+
+        // 2. CRITICAL FIX: Spawn enemy STRICTLY inside visible canvas boundaries
+        const enemyX = this.virtualW - 200; // 1080px inside 1280px canvas
+        const enemyY = this.groundY - 32;
+
+        this.currentEnemy = new ShinobiRagdoll(this.engine, enemyX, enemyY, false, {
+          health: enemyHealth,
+          isArmored: isArmored
+        }, this);
+
+        this.currentEnemy.enemyAimTimer = 2600 + Math.random() * 600;
+        this.currentEnemy.enemyShotCount = 0;
+        this.enemies = [this.currentEnemy];
+
+        // 3. Switch immediately to COMBAT state (stops scrolling!)
+        this.gameState = 'COMBAT';
+        if (this.player && !this.player.isDead) {
+          this.player.isWalking = false;
+          Matter.Body.setVelocity(this.player.torso, { x: 0, y: 0 });
+        }
+
+        this.addPopup(this.virtualW / 2, 230, '⚔️ DUEL COMMENCES! ⚔️', '#ff2a4d', true);
+      }
+
+      proceedToNextWave() {
+        if (this.waveTransitionTimer) return;
+
+        // FORCE CLEAR any active UI elements, aiming and flying projectiles immediately
+        this.isAiming = false;
+        if (this.player) this.player.isAiming = false;
+        for (let p of this.projectiles) p.destroy();
+        this.projectiles = [];
+
+        // 1.5 seconds wait: lets player celebrate victory & enemy ragdoll drop flat
+        this.waveTransitionTimer = setTimeout(() => {
+          if (this.gameState === 'GAME_OVER') return;
+
+          // FORCE CLEAR AGAIN to ensure 100% clean screen
+          this.isAiming = false;
+          if (this.player) {
+            this.player.isAiming = false;
+            this.player.isWalking = true;
+          }
+          for (let p of this.projectiles) p.destroy();
+          this.projectiles = [];
+
+          // Destroy vanquished enemy
+          if (this.currentEnemy) {
+            this.currentEnemy.destroy();
+            this.currentEnemy = null;
+            this.enemies = [];
+          }
+
+          // Switch gameState back to 'RUNNING'
+          this.gameState = 'RUNNING';
+          this.runDistanceProgress = 0;
+          this.runTargetDistance = 160 + Math.random() * 90;
+          this.waveTransitionTimer = null;
+
+          this.addPopup(220, this.groundY - 90, 'ADVANCING...', '#38bdf8', false);
+        }, 1500);
+      }
+
+      onShurikenHit(shuriken, targetBody, forceHeadshot = false) {
+        if (!shuriken || shuriken.isStuck) return;
+        const ragdoll = targetBody.ragdollOwner;
+        if (!ragdoll || ragdoll.isDead) return;
+
+        if (shuriken.isPlayer && !ragdoll.isPlayer) {
+          const isHeadshot = forceHeadshot || targetBody.label === 'enemy_head' || targetBody === ragdoll.head || targetBody.isHead;
+          const damage = isHeadshot ? 999 : (targetBody.label === 'enemy_torso' ? 45 : 30);
+
+          const hitVx = shuriken.body.velocity.x * 0.003;
+          const hitVy = shuriken.body.velocity.y * 0.003 - 0.01;
+
+          const res = ragdoll.applyHit(damage, targetBody, { x: hitVx, y: hitVy }, isHeadshot);
+          shuriken.stickTo(targetBody);
+
+          // Sparks & HP-Scaled Blood
+          this.particles.spawnImpactSparks(shuriken.body.position.x, shuriken.body.position.y, isHeadshot ? 38 : 16, isHeadshot);
+          const remainingHpPct = Math.max(0, ragdoll.health / ragdoll.maxHealth);
+          this.particles.spawnBlood(
+            shuriken.body.position.x,
+            shuriken.body.position.y,
+            shuriken.body.velocity.x,
+            shuriken.body.velocity.y,
+            remainingHpPct,
+            isHeadshot || res.defeated
+          );
+          this.sounds.playHit(isHeadshot);
+
+          if (isHeadshot) {
+            this.headshots++;
+            this.goldCoins += 25;
+            this.sounds.playCoin();
+            this.addPopup(targetBody.position.x, targetBody.position.y - 30, 'CRITICAL / HEADSHOT!', '#fbbf24', true);
+            this.addPopup(targetBody.position.x, targetBody.position.y - 58, '+25 COINS', '#f59e0b');
+          } else {
+            this.addPopup(targetBody.position.x, targetBody.position.y - 25, `-${damage}`, '#f43f5e');
+            if (res.defeated) {
+              this.goldCoins += 10;
+              this.sounds.playCoin();
+              this.addPopup(targetBody.position.x, targetBody.position.y - 50, '+10 COINS', '#f59e0b');
+            }
+          }
+
+          if (res.defeated) {
+            this.kills++;
+            this.proceedToNextWave();
+          }
+        }
+      }
+
+      handleCollisions(event) {
+        const pairs = event.pairs;
+        for (let pair of pairs) {
+          const bodyA = pair.bodyA;
+          const bodyB = pair.bodyB;
+
+          const shurikenBody = bodyA.shurikenRef ? bodyA : (bodyB.shurikenRef ? bodyB : null);
+          const targetBody = bodyA === shurikenBody ? bodyB : bodyA;
+
+          if (shurikenBody && targetBody) {
+            const shuriken = shurikenBody.shurikenRef;
+            if (shuriken.isStuck) continue;
+
+            const ragdoll = targetBody.ragdollOwner;
+
+            // FRIENDLY FIRE PROTECTION: Enemy projectile can NEVER hit an enemy
+            if (!shuriken.isPlayer && ragdoll && !ragdoll.isPlayer) {
+              continue;
+            }
+
+            // Dead ragdolls are sensors and completely ignored
+            if (ragdoll && ragdoll.isDead) {
+              continue;
+            }
+
+            // Player Shuriken hitting Enemy
+            if (shuriken.isPlayer && ragdoll && !ragdoll.isPlayer && !ragdoll.isDead) {
+              const isHeadshot = targetBody.label === 'enemy_head' || targetBody === ragdoll.head || targetBody.isHead;
+              this.onShurikenHit(shuriken, targetBody, isHeadshot);
+            }
+
+            // Enemy Shuriken hitting Player (Aimed at torso/body only)
+            if (!shuriken.isPlayer && ragdoll && ragdoll.isPlayer && !ragdoll.isDead) {
+              const damage = 25; // Balanced body damage
+
+              this.timeSinceLastDamage = 0;
+              const hitVx = shurikenBody.velocity.x * 0.003;
+              const hitVy = shurikenBody.velocity.y * 0.003 - 0.01;
+
+              ragdoll.applyHit(damage, targetBody, { x: hitVx, y: hitVy }, false);
+              shuriken.stickTo(targetBody);
+
+              this.particles.spawnImpactSparks(shurikenBody.position.x, shurikenBody.position.y, 16, false);
+              const remainingPlayerHpPct = Math.max(0, ragdoll.health / ragdoll.maxHealth);
+              this.particles.spawnBlood(
+                shurikenBody.position.x,
+                shurikenBody.position.y,
+                shurikenBody.velocity.x,
+                shurikenBody.velocity.y,
+                remainingPlayerHpPct,
+                ragdoll.isDead
+              );
+              this.sounds.playHit(false);
+              this.addPopup(targetBody.position.x, targetBody.position.y - 25, `-${damage}`, '#ef4444');
+
+              if (ragdoll.isDead) {
+                this.triggerGameOver();
+              }
+            }
+
+            // Shuriken hitting Ground Platform
+            if (targetBody.label === 'platform') {
+              if (!shuriken.isStuck && !shuriken.isGroundStuck) {
+                shuriken.isGroundStuck = true;
+                shuriken.isStuck = true;
+                shuriken.groundStuckTimer = 2500;
+                Matter.Body.setVelocity(shuriken.body, { x: 0, y: 0 });
+                Matter.Body.setAngularVelocity(shuriken.body, 0);
+                this.particles.spawnImpactSparks(shurikenBody.position.x, shurikenBody.position.y, 8, false);
+              }
+            }
+          }
+        }
+      }
+
+      triggerGameOver() {
+        if (this.gameState === 'GAME_OVER') return;
+        this.gameState = 'GAME_OVER';
+        this.sounds.playDefeat();
+
+        if (this.distanceMeters > this.bestDistance) {
+          this.bestDistance = Math.floor(this.distanceMeters);
+          localStorage.setItem('rooftop_shinobi_best', this.bestDistance.toString());
+        }
+      }
+
+      addPopup(x, y, text, color = '#ff2a4d', isCrit = false) {
+        this.popups.push({
+          x: x,
+          y: y,
+          text: text,
+          color: color,
+          isCrit: isCrit,
+          alpha: 1.0,
+          scale: isCrit ? 1.4 : 1.0,
+          vy: -1.4
+        });
+      }
+
+      updateAI(delta) {
+        if (this.gameState !== 'COMBAT' || this.waveTransitionTimer || !this.player || this.player.isDead) {
+          return;
+        }
+        if (!this.currentEnemy || this.currentEnemy.isDead || this.currentEnemy.isDestroyed) return;
+
+        const enemy = this.currentEnemy;
+
+        if (!enemy.enemyAimTimer) {
+          enemy.enemyAimTimer = 2800 + Math.random() * 800;
+        }
+        enemy.enemyAimTimer -= delta;
+
+        // Aiming Windup
+        const windupStart = 1000;
+        const windupEnd = 200;
+        if (enemy.enemyAimTimer <= windupStart && enemy.enemyAimTimer > windupEnd) {
+          enemy.isAiming = true;
+          enemy.aimPullProgress = (windupStart - enemy.enemyAimTimer) / (windupStart - windupEnd);
+        } else if (enemy.enemyAimTimer <= windupEnd && enemy.enemyAimTimer > 0) {
+          enemy.isAiming = true;
+          enemy.aimPullProgress = 1.0;
+        } else {
+          enemy.isAiming = false;
+        }
+
+        if (enemy.enemyAimTimer <= 0) {
+          enemy.isAiming = false;
+
+          enemy.enemyShotCount = (enemy.enemyShotCount || 0) + 1;
+          const shotCycle = (enemy.enemyShotCount - 1) % 5;
+          const isAccurate = (shotCycle === 0);
+
+          const startX = enemy.torso.position.x - 20;
+          const startY = enemy.torso.position.y - 10;
+
+          const targetX = this.player.torso.position.x;
+          const targetY = this.player.torso.position.y + 35; // Lower torso / body
+
+          const dx = targetX - startX;
+          const dy = targetY - startY;
+
+          const gravity = 0.32;
+          const flightSteps = 36;
+
+          let vx = dx / flightSteps;
+          let vy = (dy - 0.5 * gravity * flightSteps * flightSteps) / flightSteps;
+
+          if (isAccurate) {
+            const headX = this.player.head.position.x;
+            const headY = this.player.head.position.y;
+            let nearHead = false;
+            for (let step = 0; step <= flightSteps; step++) {
+              const px = startX + vx * step;
+              const py = startY + vy * step + 0.5 * gravity * step * step;
+              if (Math.hypot(px - headX, py - headY) < 24) {
+                nearHead = true;
+                break;
+              }
+            }
+            if (nearHead) {
+              vy += 0.85;
+              vx *= 0.94;
+            }
+          } else {
+            if (shotCycle === 1) {
+              vx *= 1.22; vy *= 1.15;
+            } else if (shotCycle === 2) {
+              vx *= 0.75; vy *= 0.82;
+            } else if (shotCycle === 3) {
+              vx *= 0.65; vy *= 0.76;
+            } else {
+              vx *= 0.85; vy -= 1.8;
+            }
+          }
+
+          const throwAngle = Math.atan2(vy, vx);
+          enemy.triggerThrow(throwAngle);
+
+          const shuriken = new Shuriken(this.engine, startX, startY, vx, vy, false, this);
+          this.projectiles.push(shuriken);
+          this.sounds.playThrow();
+
+          // Reset enemy timer
+          enemy.enemyAimTimer = 3200 + Math.random() * 800;
+        }
+      }
+
+      gameLoop(currentTime) {
+        if (!this.lastTime) this.lastTime = currentTime;
+        const delta = Math.max(0, Math.min(currentTime - this.lastTime, 40));
+        this.lastTime = currentTime;
+
+        // 1. Physics Engine Step
+        Matter.Engine.update(this.engine, delta);
+
+        // 2. State Machine: RUNNING vs COMBAT
+        if (this.gameState === 'RUNNING') {
+          // Automatic scrolling simulation
+          this.bgScrollX += this.scrollSpeed * 0.18;
+
+          // Scroll ground tiles left
+          for (let tile of this.groundTiles) {
+            tile.x -= this.scrollSpeed;
+          }
+
+          // Wrap leftmost tiles smoothly to the right edge
+          for (let tile of this.groundTiles) {
+            if (tile.x + tile.width < -120) {
+              let maxRight = -Infinity;
+              for (let t of this.groundTiles) {
+                if (t.x + t.width > maxRight) maxRight = t.x + t.width;
+              }
+              tile.x = maxRight;
+              const platformPool = ['pagoda', 'rope_bridge', 'torii_gate', 'broken_roof', 'stone_rampart', 'sakura_canopy', 'spike_pit'];
+              tile.type = platformPool[Math.floor(Math.random() * platformPool.length)];
+            }
+          }
+
+          // Accumulate distance meters
+          this.distanceMeters += (this.scrollSpeed * delta * 0.005);
+          if (this.distanceMeters > this.bestDistance) {
+            this.bestDistance = Math.floor(this.distanceMeters);
+            localStorage.setItem('rooftop_shinobi_best', this.bestDistance.toString());
+          }
+
+          // Check if distance to next duel is reached
+          this.runDistanceProgress += this.scrollSpeed;
+          if (this.runDistanceProgress >= this.runTargetDistance) {
+            this.spawnDuelEnemy();
+          }
+
+          // Ensure Player maintains running animation
+          if (this.player && !this.player.isDead) {
+            this.player.isWalking = true;
+          }
+        } else if (this.gameState === 'COMBAT') {
+          // Scrolling completely stopped!
+          if (this.player && !this.player.isDead) {
+            this.player.isWalking = false;
+          }
+          this.updateAI(delta);
+        }
+
+        // 3. Stamina Regen & Passive Healing
+        if (this.gameState === 'COMBAT' || this.gameState === 'RUNNING') {
+          if (!this.isAiming) {
+            const staminaGain = (delta / 16.66) * 0.35;
+            this.playerStamina = Math.min(this.maxStamina, this.playerStamina + staminaGain);
+          }
+
+          this.timeSinceLastDamage += delta;
+          if (this.timeSinceLastDamage > 2500 && this.player && !this.player.isDead && this.player.health < this.player.maxHealth) {
+            this.player.health = Math.min(this.player.maxHealth, this.player.health + (delta / 1000) * 5.0);
+            if (Math.random() < 0.22) {
+              this.particles.spawnHealingSparkles(this.player.torso.position.x, this.player.torso.position.y);
+            }
+          }
+        }
+
+        // 4. Update Characters
+        if (this.player) {
+          if (this.isAiming && !this.waveTransitionTimer && !this.player.isDead) {
+            this.player.isAiming = true;
+          }
+          this.player.update(currentTime, delta);
+          if (this.player.torso.position.y > 660 && !this.player.isDead) {
+            this.player.health = 0;
+            this.player.triggerRagdollDefeat();
+            this.triggerGameOver();
+          }
+        }
+
+        if (this.currentEnemy && !this.currentEnemy.isDestroyed) {
+          this.currentEnemy.update(currentTime, delta);
+        }
+
+        // 5. Update Projectiles
+        for (let i = this.projectiles.length - 1; i >= 0; i--) {
+          const p = this.projectiles[i];
+          p.update(currentTime, delta);
+          if (p.isMarkedForRemoval || p.body.position.y > 800 || p.body.position.x < -200 || p.body.position.x > this.virtualW + 200) {
+            p.destroy();
+            this.projectiles.splice(i, 1);
+          }
+        }
+
+        // 6. Update Particles & Popups
+        this.particles.update([]);
+
+        for (let i = this.popups.length - 1; i >= 0; i--) {
+          const pop = this.popups[i];
+          pop.y += pop.vy;
+          pop.alpha -= 0.022;
+          if (pop.alpha <= 0) {
+            this.popups.splice(i, 1);
+          }
+        }
+
+        // 7. Render Everything
+        this.render();
+
+        requestAnimationFrame((t) => this.gameLoop(t));
+      }
+
+      render() {
+        const ctx = this.ctx;
+        ctx.imageSmoothingEnabled = false;
+        ctx.webkitImageSmoothingEnabled = false;
+        ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+        ctx.save();
+        ctx.translate(this.offsetX, this.offsetY);
+        ctx.scale(this.scaleRatio, this.scaleRatio);
+
+        ctx.beginPath();
+        ctx.rect(0, 0, this.virtualW, this.virtualH);
+        ctx.clip();
+
+        // 1. Parallax Background
+        this.renderBackground(ctx);
+
+        // 2. Continuous Stitched Ground Floor (No Pits)
+        this.renderGround(ctx);
+
+        // 3. Characters (Enemy & Player strictly on screen)
+        if (this.currentEnemy && !this.currentEnemy.isDestroyed) {
+          this.currentEnemy.render(ctx);
+        }
+        if (this.player) {
+          this.player.render(ctx);
+        }
+
+        // 4. Projectiles
+        for (let p of this.projectiles) p.render(ctx);
+
+        // 5. Ballistic Aim Trajectory Arc (COMBAT only)
+        if (this.gameState === 'COMBAT' && this.isAiming && !this.waveTransitionTimer && this.player && !this.player.isDead) {
+          this.renderAimTrajectory(ctx);
+        }
+
+        // 6. Floating Popups
+        for (let pop of this.popups) {
+          ctx.save();
+          ctx.font = pop.isCrit ? '900 24px "Cinzel", serif' : 'bold 20px "Cinzel", serif';
+          ctx.fillStyle = pop.color;
+          ctx.globalAlpha = Math.max(0, pop.alpha);
+          ctx.shadowColor = pop.color;
+          ctx.shadowBlur = 12;
+          ctx.textAlign = 'center';
+          ctx.fillText(pop.text, pop.x, pop.y);
+          ctx.restore();
+        }
+
+        // 7. World Space Particles
+        this.particles.renderWorld(ctx);
+
+        // 8. Foreground Sakura Petals
+        this.particles.renderScreen(ctx);
+
+        // 9. Minimalist Shinobi & Duel HUD
+        this.renderHUD(ctx);
+
+        // 10. Screen Overlays
+        if (this.gameState === 'START') {
+          this.renderStartScreen(ctx);
+        } else if (this.gameState === 'GAME_OVER') {
+          this.renderGameOverScreen(ctx);
+        }
+
+        ctx.restore();
+      }
+
+      renderBackground(ctx) {
+        const bgImg = SpriteAssets.parallaxBgImg;
+        if (bgImg && bgImg.complete && bgImg.naturalWidth > 0) {
+          const bgH = this.virtualH;
+          const bgScale = bgH / bgImg.naturalHeight;
+          const bgW = bgImg.naturalWidth * bgScale;
+
+          const scrollX = this.bgScrollX % bgW;
+          let startX = -scrollX;
+          while (startX > 0) startX -= bgW;
+
+          for (let drawX = startX; drawX < this.virtualW + bgW; drawX += bgW) {
+            ctx.drawImage(bgImg, drawX, 0, bgW, bgH);
+          }
+        } else {
+          // Fallback sky gradient
+          const skyGrad = ctx.createLinearGradient(0, 0, 0, this.virtualH);
+          skyGrad.addColorStop(0, '#0a0314');
+          skyGrad.addColorStop(0.45, '#1b092b');
+          skyGrad.addColorStop(0.85, '#2e1245');
+          skyGrad.addColorStop(1, '#180826');
+          ctx.fillStyle = skyGrad;
+          ctx.fillRect(0, 0, this.virtualW, this.virtualH);
+
+          const moonX = this.virtualW * 0.76;
+          const moonY = 160;
+          const moonRadius = 64;
+
+          ctx.fillStyle = '#fef3c7';
+          ctx.shadowColor = '#fef08a';
+          ctx.shadowBlur = 24;
+          ctx.beginPath();
+          ctx.arc(moonX, moonY, moonRadius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+      }
+
+      renderGround(ctx) {
+        ctx.save();
+        for (let tile of this.groundTiles) {
+          const x = tile.x;
+          const y = tile.y;
+          const w = tile.width;
+          const h = tile.height;
+
+          const cfg = PlatformConfigs[tile.type] || PlatformConfigs.pagoda;
+          const img = SpriteAssets.getPlatformImage(tile.type);
+
+          if (img && img.complete && img.naturalWidth > 0) {
+            const drawH = Math.min(cfg.visualH || 340, Math.max(160, h));
+            const capW = cfg.leftCapW || 50;
+            const sy = cfg.walkTopSy || 243;
+            const sH = Math.min(img.naturalHeight - sy, 420);
+
+            const sliceEdgeW = Math.min(260, Math.floor(img.naturalWidth * 0.18));
+            const centerW = img.naturalWidth - sliceEdgeW * 2;
+
+            ctx.drawImage(img, 0, sy - 14, sliceEdgeW, sH, x - capW, y - 4, capW + 8, drawH);
+            ctx.drawImage(img, sliceEdgeW, sy, centerW, sH, x, y - 2, w, drawH);
+            ctx.drawImage(img, img.naturalWidth - sliceEdgeW, sy - 14, sliceEdgeW, sH, x + w - 8, y - 4, capW + 8, drawH);
+          } else {
+            ctx.fillStyle = '#14141e';
+            ctx.fillRect(x, y, w, h);
+            ctx.strokeStyle = '#ff2a4d';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x, y, w, h);
+          }
+        }
+
+        // Solid continuous base foundation below platforms to guarantee NO death pits
+        ctx.fillStyle = '#08060c';
+        ctx.fillRect(-150, this.groundY + 160, this.virtualW + 300, this.virtualH - this.groundY);
+
+        ctx.restore();
+      }
+
+      renderAimTrajectory(ctx) {
+        const aim = this.getAimLaunchVector();
+        if (!aim) return;
+
+        const gravity = 0.32;
+        const totalSteps = 28;
+
+        ctx.save();
+        for (let t = 0; t < totalSteps; t++) {
+          const px = aim.startX + aim.vx * t;
+          const py = aim.startY + aim.vy * t + 0.5 * gravity * t * t;
+
+          const dotRadius = Math.max(1.8, 4.5 - t * 0.12);
+          const alpha = Math.max(0.15, 1.0 - t * 0.035);
+
+          ctx.beginPath();
+          ctx.arc(px, py, dotRadius, 0, Math.PI * 2);
+          ctx.fillStyle = this.playerStamina < 25 ? `rgba(245, 158, 11, ${alpha})` : `rgba(255, 42, 77, ${alpha})`;
+          ctx.shadowColor = this.playerStamina < 25 ? '#f59e0b' : '#ff2a4d';
+          ctx.shadowBlur = 8;
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+      renderHUD(ctx) {
+        ctx.save();
+        ctx.globalAlpha = 1.0;
+        ctx.shadowBlur = 0;
+
+        // 1. Top-Center: Large Distance Display
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = '900 36px "Cinzel", serif';
+        ctx.shadowColor = 'rgba(255, 42, 77, 0.6)';
+        ctx.shadowBlur = 12;
+        ctx.fillText(`${Math.floor(this.distanceMeters)} m`, this.virtualW / 2, 48);
+
+        ctx.font = 'bold 14px "Cinzel", serif';
+        ctx.fillStyle = '#94a3b8';
+        ctx.shadowBlur = 0;
+        ctx.fillText(`BEST: ${this.bestDistance} m`, this.virtualW / 2, 72);
+
+        // State Banner (When Running to next fight)
+        if (this.gameState === 'RUNNING') {
+          const pulse = Math.abs(Math.sin(Date.now() * 0.005));
+          ctx.fillStyle = `rgba(56, 189, 248, ${0.7 + pulse * 0.3})`;
+          ctx.font = 'bold 16px "Cinzel", serif';
+          ctx.fillText('🏃 SPRINTING TO NEXT DUEL...', this.virtualW / 2, 102);
+        }
+
+        // 2. Top-Right: Gold Coins Counter
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = 'bold 22px "Cinzel", serif';
+        ctx.shadowColor = '#f59e0b';
+        ctx.shadowBlur = 10;
+        ctx.fillText(`🪙 ${this.goldCoins}`, this.virtualW - 32, 48);
+
+        // 3. Enemy Samurai HP Bar (During COMBAT)
+        if (this.gameState === 'COMBAT' && this.currentEnemy && !this.currentEnemy.isDestroyed) {
+          const e = this.currentEnemy;
+          const maxHp = Number(e.maxHealth || 100);
+          const rawHp = e.health !== undefined ? e.health : maxHp;
+          const currHp = isNaN(rawHp) ? maxHp : Math.max(0, Math.min(maxHp, rawHp));
+          const hpPct = Math.max(0, Math.min(1, currHp / maxHp));
+
+          const barW = 180;
+          const barX = this.virtualW - barW - 32;
+          const barY = 82;
+
+          // Enemy Card
+          ctx.fillStyle = 'rgba(8, 6, 14, 0.82)';
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(barX - 10, 62, barW + 20, 52, 6);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.textAlign = 'left';
+          ctx.fillStyle = '#ef4444';
+          ctx.font = 'bold 12px "Cinzel", sans-serif';
+          ctx.shadowBlur = 0;
+          ctx.fillText(e.isArmored ? 'SAMURAI (ARMORED)' : 'SAMURAI ENEMY', barX, barY - 4);
+
+          ctx.textAlign = 'right';
+          ctx.fillStyle = '#f8fafc';
+          ctx.font = 'bold 11px monospace';
+          ctx.fillText(`${Math.ceil(currHp)}/${maxHp}`, barX + barW, barY - 4);
+
+          // Track
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+          ctx.fillRect(barX, barY, barW, 10);
+          // Fill
+          ctx.fillStyle = '#dc2626';
+          ctx.fillRect(barX, barY, barW * hpPct, 10);
+          // Border
+          ctx.strokeStyle = '#b91c1c';
+          ctx.lineWidth = 1.2;
+          ctx.strokeRect(barX, barY, barW, 10);
+        }
+
+        // 4. Top-Left: Player Health & Stamina HUD Card
+        if (this.player) {
+          const maxHp = Number(this.player.maxHealth || this.player.maxHp || 100);
+          const rawHp = this.player.health !== undefined ? this.player.health : (this.player.hp !== undefined ? this.player.hp : maxHp);
+          const currHp = isNaN(rawHp) ? maxHp : Math.max(0, Math.min(maxHp, rawHp));
+          const hpPct = Math.max(0, Math.min(1, currHp / maxHp));
+
+          const rawStam = this.playerStamina !== undefined ? this.playerStamina : 100;
+          const maxStam = Number(this.maxStamina || 100);
+          const currStam = isNaN(rawStam) ? maxStam : Math.max(0, Math.min(maxStam, rawStam));
+          const stamPct = Math.max(0, Math.min(1, currStam / maxStam));
+
+          const barW = 175;
+          const barX = 28;
+
+          ctx.fillStyle = 'rgba(8, 6, 14, 0.82)';
+          ctx.strokeStyle = 'rgba(51, 65, 85, 0.75)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(barX - 10, 16, barW + 20, 72, 8);
+          ctx.fill();
+          ctx.stroke();
+
+          // Health Bar
+          const hpBarH = 11;
+          const hpBarY = 40;
+          const isPassiveHealing = this.timeSinceLastDamage > 2500 && currHp < maxHp && !this.player.isDead;
+
+          ctx.textAlign = 'left';
+          ctx.fillStyle = isPassiveHealing ? '#2dd4bf' : '#38bdf8';
+          ctx.font = 'bold 12px "Cinzel", "Segoe UI", sans-serif';
+          ctx.shadowBlur = 0;
+          ctx.fillText(isPassiveHealing ? 'SHINOBI HP (+HEAL)' : 'SHINOBI HP', barX, hpBarY - 6);
+
+          ctx.textAlign = 'right';
+          ctx.fillStyle = '#f8fafc';
+          ctx.font = 'bold 11px monospace';
+          ctx.fillText(`${Math.ceil(currHp)}/${maxHp}`, barX + barW, hpBarY - 6);
+
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+          ctx.fillRect(barX, hpBarY, barW, hpBarH);
+          ctx.fillStyle = hpPct > 0.25 ? '#10b981' : '#ef4444';
+          ctx.fillRect(barX, hpBarY, barW * hpPct, hpBarH);
+          ctx.strokeStyle = isPassiveHealing ? '#2dd4bf' : (hpPct > 0.25 ? '#059669' : '#dc2626');
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(barX, hpBarY, barW, hpBarH);
+
+          // Stamina Bar
+          const stamBarH = 7;
+          const stamBarY = 67;
+          const isFatigued = currStam < 25;
+
+          ctx.textAlign = 'left';
+          ctx.fillStyle = isFatigued ? '#f59e0b' : '#94a3b8';
+          ctx.font = 'bold 11px "Cinzel", "Segoe UI", sans-serif';
+          ctx.fillText(isFatigued ? 'STAMINA (FATIGUE)' : 'STAMINA', barX, stamBarY - 4);
+
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+          ctx.fillRect(barX, stamBarY, barW, stamBarH);
+          ctx.fillStyle = isFatigued ? '#f59e0b' : '#38bdf8';
+          ctx.fillRect(barX, stamBarY, barW * stamPct, stamBarH);
+          ctx.strokeStyle = isFatigued ? '#b45309' : '#0284c7';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(barX, stamBarY, barW, stamBarH);
+        }
+
+        ctx.restore();
+      }
+
+      renderStartScreen(ctx) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(8, 6, 12, 0.78)';
+        ctx.fillRect(0, 0, this.virtualW, this.virtualH);
+
+        ctx.textAlign = 'center';
+
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = '900 48px "Cinzel", serif';
+        ctx.shadowColor = '#ff2a4d';
+        ctx.shadowBlur = 20;
+        ctx.fillText('SHADOW SHURIKEN', this.virtualW / 2, this.virtualH / 2 - 70);
+
+        ctx.fillStyle = '#ff2a4d';
+        ctx.font = 'bold 24px "Cinzel", serif';
+        ctx.shadowBlur = 10;
+        ctx.fillText('ROOFTOP SHINOBI', this.virtualW / 2, this.virtualH / 2 - 25);
+
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = '16px "Cinzel", serif';
+        ctx.shadowBlur = 0;
+        ctx.fillText('🏹 DRAG BACKWARD TO AIM & RELEASE SHURIKEN', this.virtualW / 2, this.virtualH / 2 + 35);
+        ctx.fillText('💀 HEADSHOTS DEAL INSTANT CRITICAL KO & DOUBLE COINS', this.virtualW / 2, this.virtualH / 2 + 65);
+
+        const pulse = Math.abs(Math.sin(Date.now() * 0.005));
+        ctx.fillStyle = `rgba(251, 191, 36, ${0.7 + pulse * 0.3})`;
+        ctx.font = 'bold 22px "Cinzel", serif';
+        ctx.fillText('— TAP / CLICK TO COMMENCE DUEL —', this.virtualW / 2, this.virtualH / 2 + 130);
+
+        ctx.restore();
+      }
+
+      renderGameOverScreen(ctx) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(8, 6, 12, 0.88)';
+        ctx.fillRect(0, 0, this.virtualW, this.virtualH);
+
+        ctx.textAlign = 'center';
+
+        ctx.fillStyle = '#ef4444';
+        ctx.font = '900 50px "Cinzel", serif';
+        ctx.shadowColor = '#dc2626';
+        ctx.shadowBlur = 24;
+        ctx.fillText('SHADOW FALLEN', this.virtualW / 2, this.virtualH / 2 - 110);
+
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = 'bold 22px "Cinzel", serif';
+        ctx.shadowBlur = 0;
+        ctx.fillText(`DISTANCE SURVIVED: ${Math.floor(this.distanceMeters)} m`, this.virtualW / 2, this.virtualH / 2 - 40);
+
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = 'bold 18px "Cinzel", serif';
+        ctx.fillText(`BEST RECORD: ${this.bestDistance} m`, this.virtualW / 2, this.virtualH / 2 - 10);
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '17px "Cinzel", serif';
+        ctx.fillText(`Enemies Vanquished: ${this.kills}  |  Critical Headshots: ${this.headshots}  |  Coins: ${this.goldCoins}`, this.virtualW / 2, this.virtualH / 2 + 25);
+
+        const btnW = 220, btnH = 55;
+        const btnX = this.virtualW / 2 - btnW / 2;
+        const btnY = this.virtualH / 2 + 85;
+
+        ctx.fillStyle = '#ff2a4d';
+        ctx.shadowColor = '#ff2a4d';
+        ctx.shadowBlur = 18;
+        ctx.beginPath();
+        ctx.roundRect(btnX, btnY, btnW, btnH, 8);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 20px "Cinzel", serif';
+        ctx.fillText('PLAY AGAIN', this.virtualW / 2, btnY + 35);
+
+        ctx.restore();
+      }
+    }
+
+
+    // Launch Game on window load or DOM ready
+    function initGame() {
+      if (!window.gameInstance) {
+        window.gameInstance = new ShadowShurikenGame();
+      }
+    }
+    if (document.readyState === 'loading') {
+      window.addEventListener('DOMContentLoaded', initGame);
+      window.addEventListener('load', initGame);
+    } else {
+      initGame();
+    }
+
+  })();
+  </script>
 </body>
 </html>

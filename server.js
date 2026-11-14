@@ -18,7 +18,7 @@ const MIME_TYPES = {
 
 const server = http.createServer((req, res) => {
   let reqPath = decodeURI(req.url.split('?')[0]);
-  if (reqPath === '/' || reqPath === '') {
+  if (reqPath === '/' || reqPath === '' || reqPath.startsWith('/monster-knockout')) {
     reqPath = '/index.html';
   }
 
@@ -56,7 +56,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
   console.log(`\n======================================================`);
-  console.log(`🥊 Monster Knockout Server Running!`);
+  console.log(`🥷 Shadow Shuriken: Rooftop Shinobi Running!`);
   console.log(`👉 Open in your browser: http://localhost:${PORT}`);
   console.log(`======================================================\n`);
 });
